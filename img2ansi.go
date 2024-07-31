@@ -1,23 +1,28 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"gocv.io/x/gocv"
 	"image"
-	"image/color"
 	_ "image/png"
 	"math"
 	"os"
+	"slices"
+	"strings"
 )
 
 const (
-	ESC         = "\u001b"
-	TargetWidth = 160
-	MaxChars    = 128000
+	ESC = "\u001b"
 )
 
 var (
-	fgDiscord = map[uint32]string{
+	TargetWidth  = 100
+	ScaleFactor  = 3.0
+	MaxChars     = 1048576
+	Shading      = false
+	Quantization = 1
+	fgAnsi       = map[uint32]string{
 		0x000000: "30", // BLACK
 		0xFF0000: "31", // RED
 		0x00FF00: "32", // GREEN
@@ -28,22 +33,39 @@ var (
 		0xFFFFFF: "37", // WHITE
 	}
 
-	bgDiscord = make(map[uint32]string)
+	bgAnsi = make(map[uint32]string)
 
-	blocks = []rune{' ', '▘', '▝', '▀', '▖', '▌', '▞', '▛', '▗', '▚', '▐', '▜', '▄', '▙', '▟', '█'}
+	blocks = []rune{
+		' ', // 0000 - Empty space
+		'▘', // 0001 - Quadrant upper left
+		'▝', // 0010 - Quadrant upper right
+		'▀', // 0011 - Upper half block
+		'▖', // 0100 - Quadrant lower left
+		'▌', // 0101 - Left half block
+		'▞', // 0110 - Quadrant diagonal upper right and lower left
+		'▛', // 0111 - Three quadrants: upper left, upper right, lower left
+		'▗', // 1000 - Quadrant lower right
+		'▚', // 1001 - Quadrant diagonal upper left and lower right
+		'▐', // 1010 - Right half block
+		'▜', // 1011 - Three quadrants: upper left, upper right, lower right
+		'▄', // 1100 - Lower half block
+		'▙', // 1101 - Three quadrants: upper left, lower left, lower right
+		'▟', // 1110 - Three quadrants: upper right, lower left, lower right
+		'█', // 1111 - Full block
+	}
 )
 
 func init() {
-	for color, code := range fgDiscord {
-		bgDiscord[color] = "4" + code[1:]
+	for color, code := range fgAnsi {
+		bgAnsi[color] = "4" + code[1:]
 	}
 }
 
 func rgbToANSI(r, g, b uint8, fg bool) (uint32, string) {
 	color := uint32(r)<<16 | uint32(g)<<8 | uint32(b)
-	colorDict := fgDiscord
+	colorDict := fgAnsi
 	if !fg {
-		colorDict = bgDiscord
+		colorDict = bgAnsi
 	}
 
 	minDiff := uint32(math.MaxUint32)
@@ -82,13 +104,12 @@ func detectEdges(img gocv.Mat) gocv.Mat {
 	return edges
 }
 
-func quantizeColor(c color.RGBA, quant int) color.RGBA {
-	qFactor := 256 / float64(quant)
-	return color.RGBA{
-		R: uint8(math.Round(float64(c.R)/qFactor) * qFactor),
-		G: uint8(math.Round(float64(c.G)/qFactor) * qFactor),
-		B: uint8(math.Round(float64(c.B)/qFactor) * qFactor),
-		A: c.A,
+func quantizeColor(c gocv.Vecb) gocv.Vecb {
+	qFactor := 256 / float64(Quantization)
+	return gocv.Vecb{
+		uint8(math.Round(float64(c[0])/qFactor) * qFactor),
+		uint8(math.Round(float64(c[1])/qFactor) * qFactor),
+		uint8(math.Round(float64(c[2])/qFactor) * qFactor),
 	}
 }
 
@@ -99,17 +120,14 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			oldPixel := img.GetVecbAt(y, x)
-			r, g, b := oldPixel[2], oldPixel[1], oldPixel[0]
+			quantizedPixel := quantizeColor(oldPixel)
+			r, g, b := quantizedPixel[2], quantizedPixel[1], quantizedPixel[0]
 
 			newColor, _ := rgbToANSI(r, g, b, true)
 			// Store full color information
 			newImage.SetUCharAt(y, x*3+2, uint8(newColor>>16))
 			newImage.SetUCharAt(y, x*3+1, uint8(newColor>>8))
 			newImage.SetUCharAt(y, x*3, uint8(newColor&0xFF))
-
-			if oldPixel[0] != 0 && oldPixel[1] != 0 && oldPixel[2] != 0 {
-				fmt.Printf("AtkinsonDither: Pixel at (%d, %d): Original RGB(%d,%d,%d), Stored value: %d\n", x, y, r, g, b, newColor)
-			}
 
 			if edges.GetUCharAt(y, x) > 0 || colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), newColor) < 1250 {
 				continue
@@ -147,7 +165,7 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 }
 
 func colorFromANSI(ansiCode string) uint32 {
-	for color, code := range fgDiscord {
+	for color, code := range fgAnsi {
 		if code == ansiCode {
 			return color
 		}
@@ -160,10 +178,78 @@ func getANSICode(img gocv.Mat, y, x int) string {
 	g := img.GetUCharAt(y, x*3+1)
 	b := img.GetUCharAt(y, x*3)
 	_, ansiCode := rgbToANSI(r, g, b, true)
-	if r != 0 && g != 0 && b != 0 {
-		println("getANSICode: Pixel at (%d, %d): RGB(%d,%d,%d), ANSI: %s\n", x, y, r, g, b, ansiCode)
-	}
 	return ansiCode
+}
+
+func compressANSI(ansiImage string) string {
+	var compressed strings.Builder
+	var currentFg, currentBg, currentBlock string
+	var count int
+
+	lines := strings.Split(ansiImage, "\n")
+	for _, line := range lines {
+		segments := strings.Split(line, "\u001b[")
+		for _, segment := range segments {
+			if segment == "" {
+				continue
+			}
+			parts := strings.SplitN(segment, "m", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			colorCode, block := parts[0], parts[1]
+			fg, bg := extractColors(colorCode)
+
+			if fg != currentFg || bg != currentBg || block != currentBlock {
+				if count > 0 {
+					compressed.WriteString(formatANSICode(currentFg, currentBg, currentBlock, count))
+				}
+				currentFg, currentBg, currentBlock = fg, bg, block
+				count = 1
+			} else {
+				count++
+			}
+		}
+		if count > 0 {
+			compressed.WriteString(formatANSICode(currentFg, currentBg, currentBlock, count))
+		}
+		compressed.WriteString(fmt.Sprintf("%s[0m\n", ESC))
+		count = 0
+		currentFg, currentBg = "", "" // Reset colors at end of line
+	}
+
+	return compressed.String()
+}
+
+func formatANSICode(fg, bg, block string, count int) string {
+	var code strings.Builder
+	code.WriteString(ESC)
+	code.WriteByte('[')
+	if fg != "" {
+		code.WriteString(fg)
+		if bg != "" {
+			code.WriteByte(';')
+		}
+	}
+	if bg != "" {
+		code.WriteString(bg)
+	}
+	code.WriteByte('m')
+	code.WriteString(strings.Repeat(block, count))
+	return code.String()
+}
+
+func extractColors(colorCode string) (string, string) {
+	colors := strings.Split(colorCode, ";")
+	var fg, bg string
+	for _, color := range colors {
+		if strings.HasPrefix(color, "3") {
+			fg = color
+		} else if strings.HasPrefix(color, "4") {
+			bg = color
+		}
+	}
+	return fg, bg
 }
 
 func saveToPNG(img gocv.Mat, filename string) error {
@@ -172,6 +258,83 @@ func saveToPNG(img gocv.Mat, filename string) error {
 		return fmt.Errorf("failed to write image to file: %s", filename)
 	}
 	return nil
+}
+
+// 		rowCt := len(line) + len(fmt.Sprintf("%s[0m\n", ESC))
+//		compressed.WriteString(fmt.Sprintf("%s[0m %d\n", ESC, rowCt))
+
+func getBlock(upperLeft, upperRight, lowerLeft, lowerRight bool) rune {
+	index := 0
+	if upperLeft {
+		index |= 1
+	}
+	if upperRight {
+		index |= 2
+	}
+	if lowerLeft {
+		index |= 4
+	}
+	if lowerRight {
+		index |= 8
+	}
+	return blocks[index]
+}
+
+func averageColor(colors []string) string {
+	var r, g, b, count float64
+	for _, colorStr := range colors {
+		color := colorFromANSI(colorStr)
+		r += float64((color >> 16) & 0xFF)
+		g += float64((color >> 8) & 0xFF)
+		b += float64(color & 0xFF)
+		count++
+	}
+	avgR := uint8(r / count)
+	avgG := uint8(g / count)
+	avgB := uint8(b / count)
+	_, ansiCode := rgbToANSI(avgR, avgG, avgB, true)
+	return ansiCode
+}
+
+func chooseColorsFromNeighborhood(img gocv.Mat, y, x int) (string, string) {
+	neighborhoodSize := 5
+	colorCounts := make(map[string]int)
+
+	for dy := -neighborhoodSize / 2; dy <= neighborhoodSize/2; dy++ {
+		for dx := -neighborhoodSize / 2; dx <= neighborhoodSize/2; dx++ {
+			ny, nx := y+dy*2, x+dx*2
+			if ny >= 0 && ny < img.Rows() && nx >= 0 && nx < img.Cols() {
+				color := getANSICode(img, ny, nx)
+				colorCounts[color]++
+			}
+		}
+	}
+
+	sortedColors := getMostFrequentColors(mapToSlice(colorCounts))
+	if len(sortedColors) == 1 {
+		return sortedColors[0], sortedColors[0]
+	} else {
+		return sortedColors[0], sortedColors[1]
+	}
+}
+
+func getBlockFromColors(colors []string, fgColor, bgColor string) rune {
+	return getBlock(
+		colors[0] == fgColor,
+		colors[1] == fgColor,
+		colors[2] == fgColor,
+		colors[3] == fgColor,
+	)
+}
+
+func mapToSlice(m map[string]int) []string {
+	result := make([]string, 0, len(m))
+	for k, ct := range m {
+		for i := 0; i < ct; i++ {
+			result = append(result, k)
+		}
+	}
+	return result
 }
 
 func imageToANSI(imagePath string) string {
@@ -183,62 +346,63 @@ func imageToANSI(imagePath string) string {
 
 	aspectRatio := float64(img.Cols()) / float64(img.Rows())
 	width := TargetWidth
-	height := int(float64(width) / aspectRatio / 2)
+	height := int(float64(width) / aspectRatio / ScaleFactor)
 
 	for {
 		resized := gocv.NewMat()
-		gocv.Resize(img, &resized, image.Point{X: width, Y: height * 2}, 0, 0, gocv.InterpolationLinear)
-		// Save the resized image as PNG
-		err := saveToPNG(resized, "resized_output.png")
+		gocv.Resize(img, &resized, image.Point{X: width * 2, Y: height * 2}, 0, 0, gocv.InterpolationLinear)
 
 		edges := detectEdges(resized)
 		ditheredImg := modifiedAtkinsonDither(resized, edges)
 
-		// Save the dithered image as PNG
-		err = saveToPNG(ditheredImg, "dithered_output.png")
-		if err != nil {
-			fmt.Printf("Error saving dithered image: %v\n", err)
-		} else {
-			fmt.Println("Dithered image saved as dithered_output.png")
-		}
-
 		ansiImage := ""
-		var currentFg, currentBg string
 
 		imgHeight, imgWidth := ditheredImg.Rows(), ditheredImg.Cols()
 
 		for y := 0; y < imgHeight; y += 2 {
-			for x := 0; x < imgWidth; x++ {
-				upperColor := getANSICode(ditheredImg, y, x)
-				lowerColor := ""
-				if y+1 < imgHeight {
-					lowerColor = getANSICode(ditheredImg, y+1, x)
-				} else {
-					lowerColor = upperColor // Use upper color if we're at the bottom edge
+			for x := 0; x < imgWidth; x += 2 {
+				colors := []string{
+					getANSICode(ditheredImg, y, x),
+					getANSICode(ditheredImg, y, x+1),
+					getANSICode(ditheredImg, y+1, x),
+					getANSICode(ditheredImg, y+1, x+1),
 				}
 
-				if upperColor == lowerColor {
-					if currentFg != upperColor {
-						ansiImage += fmt.Sprintf("%s[%sm", ESC, upperColor)
-						currentFg = upperColor
-					}
-					ansiImage += "█"
+				uniqueColors := make(map[string]int)
+				for _, c := range colors {
+					uniqueColors[c]++
+				}
+
+				if len(uniqueColors) > 2 && Shading {
+					// Handle the three-or-more-color case
+					fgColor, bgColor := chooseColorsFromNeighborhood(ditheredImg, y, x)
+					block := getBlockFromColors(colors, fgColor, bgColor)
+					ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgAnsi[colorFromANSI(bgColor)], string(block))
 				} else {
-					if currentFg != upperColor {
-						ansiImage += fmt.Sprintf("%s[%sm", ESC, upperColor)
-						currentFg = upperColor
+					// Handle the two-color case (or single color)
+					dominantColors := getMostFrequentColors(colors)
+					fgColor := dominantColors[0]
+					var bgColor string
+					var block rune
+
+					if len(dominantColors) > 1 {
+						bgColor = bgAnsi[colorFromANSI(dominantColors[1])]
+						block = getBlock(
+							colors[0] == fgColor,
+							colors[1] == fgColor,
+							colors[2] == fgColor,
+							colors[3] == fgColor,
+						)
+					} else {
+						bgColor = "40" // Default to black background for single color
+						block = '█'    // Full block
 					}
-					if currentBg != lowerColor {
-						ansiImage += fmt.Sprintf("%s[%sm", ESC, bgDiscord[colorFromANSI(lowerColor)])
-						currentBg = lowerColor
-					}
-					ansiImage += "▀"
+
+					ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgColor, string(block))
 				}
 			}
 
 			ansiImage += fmt.Sprintf("%s[0m\n", ESC)
-			currentFg = ""
-			currentBg = ""
 		}
 
 		if len(ansiImage) <= MaxChars {
@@ -253,14 +417,81 @@ func imageToANSI(imagePath string) string {
 	}
 }
 
+func getMostFrequentColors(colors []string) []string {
+	colorCount := make(map[string]int)
+	for _, color := range colors {
+		colorCount[color]++
+	}
+	// Sort the colors by frequency -- first create tuples
+	type colorTuple struct {
+		color string
+		count int
+	}
+	colorTuples := make([]colorTuple, 0, len(colorCount))
+	for color, count := range colorCount {
+		colorTuples = append(colorTuples, colorTuple{color, count})
+	}
+	// Sort the tuples by count
+	slices.SortFunc(colorTuples, func(a colorTuple, j colorTuple) int {
+		return j.count - a.count
+	})
+
+	// Extract the colors from the sorted tuples
+	dominantColors := make([]string, 0, len(colorTuples))
+	for _, tuple := range colorTuples {
+		dominantColors = append(dominantColors, tuple.color)
+	}
+
+	return dominantColors
+}
+
 func main() {
+	inputFile := flag.String("input", "", "Path to the input image file (required)")
+	targetWidth := flag.Int("width", 100, "Target width of the output image")
+	maxChars := flag.Int("maxchars", 1048576, "Maximum number of characters in the output")
+	enableShading := flag.Bool("shading", false, "Enable shading for more detailed output")
+	outputFile := flag.String("output", "", "Path to save the output (if not specified, prints to stdout)")
+	quantization := flag.Int("quantization", 256, "Quantization factor")
+	scaleFactor := flag.Float64("scale", 3.0, "Scale factor for the output image")
+
+	// Parse flags
+	flag.Parse()
+
+	// Validate required flags
+	if *inputFile == "" {
+		fmt.Println("Please provide the path to the input image using the -input flag")
+		flag.PrintDefaults()
+		return
+	}
+
+	// Update global variables
+	TargetWidth = *targetWidth
+	MaxChars = *maxChars
+	Shading = *enableShading
+	Quantization = *quantization
+	ScaleFactor = *scaleFactor
+
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide the path to the image as an argument")
 		return
 	}
 
-	imagePath := os.Args[1]
-	ansiArt := imageToANSI(imagePath)
-	fmt.Print(ansiArt)
+	// Generate ANSI art
+	ansiArt := imageToANSI(*inputFile)
+	compressedArt := compressANSI(ansiArt)
+
+	// Output result
+	if *outputFile != "" {
+		err := os.WriteFile(*outputFile, []byte(compressedArt), 0644)
+		if err != nil {
+			fmt.Printf("Error writing to file: %v\n", err)
+			return
+		}
+		fmt.Printf("Output written to %s\n", *outputFile)
+	} else {
+		fmt.Print(compressedArt)
+	}
+
 	fmt.Printf("Total string length: %d\n", len(ansiArt))
+	fmt.Printf("Compressed string length: %d\n", len(compressedArt))
 }
