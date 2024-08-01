@@ -23,14 +23,25 @@ var (
 	Shading      = false
 	Quantization = 1
 	fgAnsi       = map[uint32]string{
+		// Original colors (more likely to be selected)
 		0x000000: "30", // BLACK
-		0xFF0000: "31", // RED
-		0x00FF00: "32", // GREEN
-		0xFFFF00: "33", // YELLOW
-		0x0000FF: "34", // BLUE
-		0xFF00FF: "35", // MAGENTA
-		0x00FFFF: "36", // CYAN
-		0xFFFFFF: "37", // WHITE
+		0xEB5156: "31", // RED
+		0x69953D: "32", // GREEN
+		0xA28B2F: "33", // YELLOW
+		0x5291CF: "34", // BLUE
+		0x9F73BA: "35", // MAGENTA
+		0x48A0A2: "36", // CYAN
+		0x808080: "37", // WHITE
+
+		// Additional colors (less likely to be selected)
+		0x4D4D4D: "90", // BRIGHT BLACK (dark gray)
+		0xEF5357: "91", // BRIGHT RED (darker)
+		0x70C13E: "92", // BRIGHT GREEN (darker)
+		0xE3C23C: "93", // BRIGHT YELLOW (darker)
+		0x54AFF9: "94", // BRIGHT BLUE (darker)
+		0xDF84E7: "95", // BRIGHT MAGENTA (darker)
+		0x67E0E1: "96", // BRIGHT CYAN (darker)
+		0xC0C0C0: "97", // BRIGHT WHITE (light gray)
 	}
 
 	bgAnsi = make(map[uint32]string)
@@ -57,7 +68,11 @@ var (
 
 func init() {
 	for color, code := range fgAnsi {
-		bgAnsi[color] = "4" + code[1:]
+		if code[0] == '3' {
+			bgAnsi[color] = "4" + code[1:]
+		} else if code[0] == '9' {
+			bgAnsi[color] = "10" + code[1:]
+		}
 	}
 }
 
@@ -354,6 +369,8 @@ func imageToANSI(imagePath string) string {
 
 		edges := detectEdges(resized)
 		ditheredImg := modifiedAtkinsonDither(resized, edges)
+		// Write the dithered image to a file for debugging
+		saveToPNG(ditheredImg, "dithered.png")
 
 		ansiImage := ""
 
@@ -478,7 +495,8 @@ func main() {
 
 	// Generate ANSI art
 	ansiArt := imageToANSI(*inputFile)
-	compressedArt := compressANSI(ansiArt)
+	//compressedArt := compressANSI(ansiArt)
+	compressedArt := ansiArt
 
 	// Output result
 	if *outputFile != "" {
