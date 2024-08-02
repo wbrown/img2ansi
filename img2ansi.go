@@ -23,27 +23,48 @@ var (
 	Shading      = false
 	Quantization = 1
 	fgAnsi       = map[uint32]string{
+		// Original colors
 		0x000000: "30", // BLACK
-		0xEB5156: "31", // RED
-		0x69953D: "32", // GREEN
-		0xA28B2F: "33", // YELLOW
-		0x5291CF: "34", // BLUE
-		0x9F73BA: "35", // MAGENTA
-		0x48A0A2: "36", // CYAN
+		0xF0524F: "31", // RED
+		0x5C962C: "32", // GREEN
+		0xA68A0D: "33", // YELLOW
+		0x3993D4: "34", // BLUE
+		0xA771BF: "35", // MAGENTA
+		0x00A3A3: "36", // CYAN
 		0x808080: "37", // WHITE
 
-		// Additional colors (less likely to be selected)
-		0x4D4D4D: "90", // BRIGHT BLACK (dark gray)
-		0xEF5357: "91", // BRIGHT RED (darker)
-		0x70C13E: "92", // BRIGHT GREEN (darker)
-		0xE3C23C: "93", // BRIGHT YELLOW (darker)
-		0x54AFF9: "94", // BRIGHT BLUE (darker)
-		0xDF84E7: "95", // BRIGHT MAGENTA (darker)
-		0x67E0E1: "96", // BRIGHT CYAN (darker)
-		0xC0C0C0: "97", // BRIGHT WHITE (light gray)
+		// Bright colors
+		0x575959: "90", // BRIGHT BLACK (dark gray)
+		0xFF4050: "91", // BRIGHT RED (darker)
+		0x4FC414: "92", // BRIGHT GREEN (darker)
+		0xE5BF00: "93", // BRIGHT YELLOW (darker)
+		0x1FB0FF: "94", // BRIGHT BLUE (darker)
+		0xED7EED: "95", // BRIGHT MAGENTA (darker)
+		0x00E5E5: "96", // BRIGHT CYAN (darker)
+		0xFFFFFF: "97", // BRIGHT WHITE (light gray)
 	}
 
-	bgAnsi = make(map[uint32]string)
+	bgAnsi = map[uint32]string{
+		// Original colors
+		0x000000: "40", // BLACK
+		0x772E2C: "41", // RED
+		0x39511F: "42", // GREEN
+		0x5C4F17: "43", // YELLOW
+		0x245980: "44", // BLUE
+		0x5C4069: "45", // MAGENTA
+		0x154F4F: "46", // CYAN
+		0x616161: "47", // WHITE
+
+		// Bright colors
+		0x424242: "100", // BRIGHT BLACK (dark gray)
+		0xB82421: "101", // BRIGHT RED (darker)
+		0x458500: "102", // BRIGHT GREEN (darker)
+		0xA87B00: "103", // BRIGHT YELLOW (darker)
+		0x1778BD: "104", // BRIGHT BLUE (darker)
+		0xB247B2: "105", // BRIGHT MAGENTA (darker)
+		0x006E6E: "106", // BRIGHT CYAN (darker)
+		0xFFFFFF: "107", // BRIGHT WHITE (light gray)
+	}
 
 	blocks = []rune{
 		' ', // 0000 - Empty space
@@ -66,13 +87,13 @@ var (
 )
 
 func init() {
-	for color, code := range fgAnsi {
-		if code[0] == '3' {
-			bgAnsi[color] = "4" + code[1:]
-		} else if code[0] == '9' {
-			bgAnsi[color] = "10" + code[1:]
-		}
-	}
+	//for color, code := range fgAnsi {
+	//	if code[0] == '3' {
+	//		bgAnsi[color] = "4" + code[1:]
+	//	} else if code[0] == '9' {
+	//		bgAnsi[color] = "10" + code[1:]
+	//	}
+	//}
 }
 
 func rgbToANSI(r, g, b uint8, fg bool) (uint32, string) {
@@ -154,7 +175,7 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 			newImage.SetUCharAt(y, x*3+1, uint8(newColor>>8))
 			newImage.SetUCharAt(y, x*3, uint8(newColor&0xFF))
 
-			if edges.GetUCharAt(y, x) > 0 { //|| colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), newColor) < 500 {
+			if edges.GetUCharAt(y, x) > 0 || colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), newColor) < 100 {
 				continue
 			}
 
@@ -407,25 +428,78 @@ func imageToANSI(imagePath string) string {
 					ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgAnsi[colorFromANSI(bgColor)], string(block))
 				} else {
 					// Handle the two-color case (or single color)
+					var fgColor, bgColor string
 					dominantColors := getMostFrequentColors(colors)
-					fgColor := dominantColors[0]
-					var bgColor string
+					for _, color := range dominantColors {
+						isForeground := color[0] == '3' || color[0] == '9'
+						isBackground := color[0] == '4' || color[0] == '1'
+						if isBackground && bgColor == "" {
+							bgColor = color
+						} else if isForeground && fgColor == "" {
+							fgColor = color
+						} else if isForeground && bgColor == "" {
+							// Convert to background color
+							oldFgColor := colorFromANSI(color)
+							_, bgColor = rgbToANSI(uint8(oldFgColor>>16), uint8(oldFgColor>>8), uint8(oldFgColor), false)
+							for i, c := range colors {
+								if c == color {
+									colors[i] = bgColor
+								}
+							}
+						} else if isBackground && fgColor == "" {
+							// Convert to foreground color
+							oldBgColor := colorFromANSI(color)
+							_, fgColor = rgbToANSI(uint8(oldBgColor>>16), uint8(oldBgColor>>8), uint8(oldBgColor), true)
+							for i, c := range colors {
+								if c == color {
+									colors[i] = fgColor
+								}
+							}
+						} else {
+							// Determine if the color is closer to the foreground or background
+							oldColor := colorFromANSI(color)
+							fgDist := colorDistance(oldColor, colorFromANSI(fgColor))
+							bgDist := colorDistance(oldColor, colorFromANSI(bgColor))
+							var replacementColor string
+							if fgDist < bgDist {
+								replacementColor = fgColor
+							} else {
+								replacementColor = bgColor
+							}
+							// Replace the color in the list
+							for i, c := range colors {
+								if c == color {
+									colors[i] = replacementColor
+								}
+							}
+						}
+					}
+
 					var block rune
 
+					dominantColors = getMostFrequentColors(colors)
+
 					if len(dominantColors) > 1 {
-						bgColor = bgAnsi[colorFromANSI(dominantColors[1])]
 						block = getBlock(
 							colors[0] == fgColor,
 							colors[1] == fgColor,
 							colors[2] == fgColor,
 							colors[3] == fgColor,
 						)
+					} else if fgColor != "" {
+						block = '█' // Full block
 					} else {
-						bgColor = "40" // Default to black background for single color
-						block = '█'    // Full block
+						block = ' ' // Empty space
 					}
 
-					ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgColor, string(block))
+					if fgColor == "" {
+						ansiImage += fmt.Sprintf("%s[;%s", ESC, bgColor, string(block))
+					}
+					if bgColor == "" {
+						ansiImage += fmt.Sprintf("%s[%sm%s", ESC, fgColor, string(block))
+					} else {
+						ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgColor, string(block))
+					}
 				}
 			}
 
