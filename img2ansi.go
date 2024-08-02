@@ -23,7 +23,6 @@ var (
 	Shading      = false
 	Quantization = 1
 	fgAnsi       = map[uint32]string{
-		// Original colors (more likely to be selected)
 		0x000000: "30", // BLACK
 		0xEB5156: "31", // RED
 		0x69953D: "32", // GREEN
@@ -138,13 +137,24 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 			quantizedPixel := quantizeColor(oldPixel)
 			r, g, b := quantizedPixel[2], quantizedPixel[1], quantizedPixel[0]
 
-			newColor, _ := rgbToANSI(r, g, b, true)
+			fgColor, _ := rgbToANSI(r, g, b, true)
+			bgColor, _ := rgbToANSI(r, g, b, false)
+			// Check which color is closer to the original
+			fgDist := colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), fgColor)
+			bgDist := colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), bgColor)
+			var newColor uint32
+			if bgDist < fgDist {
+				newColor = bgColor
+			} else {
+				newColor = fgColor
+			}
+
 			// Store full color information
 			newImage.SetUCharAt(y, x*3+2, uint8(newColor>>16))
 			newImage.SetUCharAt(y, x*3+1, uint8(newColor>>8))
 			newImage.SetUCharAt(y, x*3, uint8(newColor&0xFF))
 
-			if edges.GetUCharAt(y, x) > 0 || colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), newColor) < 1250 {
+			if edges.GetUCharAt(y, x) > 0 { //|| colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), newColor) < 500 {
 				continue
 			}
 
@@ -258,9 +268,9 @@ func extractColors(colorCode string) (string, string) {
 	colors := strings.Split(colorCode, ";")
 	var fg, bg string
 	for _, color := range colors {
-		if strings.HasPrefix(color, "3") {
+		if strings.HasPrefix(color, "3") || strings.HasPrefix(color, "9") {
 			fg = color
-		} else if strings.HasPrefix(color, "4") {
+		} else if strings.HasPrefix(color, "4") || strings.HasPrefix(color, "10") {
 			bg = color
 		}
 	}
@@ -495,8 +505,7 @@ func main() {
 
 	// Generate ANSI art
 	ansiArt := imageToANSI(*inputFile)
-	//compressedArt := compressANSI(ansiArt)
-	compressedArt := ansiArt
+	compressedArt := compressANSI(ansiArt)
 
 	// Output result
 	if *outputFile != "" {
