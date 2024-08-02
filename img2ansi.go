@@ -17,6 +17,7 @@ const (
 )
 
 var (
+	EdgeThreshold = 100
 	TargetWidth   = 100
 	ScaleFactor   = 3.0
 	MaxChars      = 1048576
@@ -183,8 +184,9 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 			fgColor, _ := rgbToANSI(r, g, b, true)
 			bgColor, _ := rgbToANSI(r, g, b, false)
 			// Check which color is closer to the original
-			fgDist := colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), fgColor)
-			bgDist := colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), bgColor)
+			rgbColor := uint32(r)<<16 | uint32(g)<<8 | uint32(b)
+			fgDist := colorDistance(rgbColor, fgColor)
+			bgDist := colorDistance(rgbColor, bgColor)
 			var newColor uint32
 			if bgDist < fgDist {
 				newColor = bgColor
@@ -197,7 +199,10 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 			newImage.SetUCharAt(y, x*3+1, uint8(newColor>>8))
 			newImage.SetUCharAt(y, x*3, uint8(newColor&0xFF))
 
-			if edges.GetUCharAt(y, x) > 0 || colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), newColor) < 100 {
+			newColorDistance := colorDistance(
+				uint32(r)<<16|uint32(g)<<8|uint32(b), newColor)
+			if edges.GetUCharAt(y, x) > 0 ||
+				newColorDistance < uint32(EdgeThreshold) {
 				continue
 			}
 
@@ -214,7 +219,9 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 				if y >= 0 && y < height && x >= 0 && x < width {
 					pixel := img.GetVecbAt(y, x)
 					for i := 0; i < 3; i++ {
-						newVal := uint8(math.Max(0, math.Min(255, float64(pixel[2-i])+dithError[i]*factor)))
+						dErr := float64(pixel[2-i]) + dithError[i]*factor
+						newVal := uint8(math.Max(0,
+							math.Min(255, dErr)))
 						img.SetUCharAt(y, x*3+(2-i), newVal)
 					}
 				}
@@ -281,7 +288,9 @@ func compressANSI(ansiImage string) string {
 
 			if fg != currentFg || bg != currentBg || block != currentBlock {
 				if count > 0 {
-					compressed.WriteString(formatANSICode(currentFg, currentBg, currentBlock, count))
+					compressed.WriteString(
+						formatANSICode(currentFg,
+							currentBg, currentBlock, count))
 				}
 				currentFg, currentBg, currentBlock = fg, bg, block
 				count = 1
@@ -290,7 +299,8 @@ func compressANSI(ansiImage string) string {
 			}
 		}
 		if count > 0 {
-			compressed.WriteString(formatANSICode(currentFg, currentBg, currentBlock, count))
+			compressed.WriteString(
+				formatANSICode(currentFg, currentBg, currentBlock, count))
 		}
 		compressed.WriteString(fmt.Sprintf("%s[0m\n", ESC))
 		count = 0
@@ -324,9 +334,11 @@ func extractColors(colorCode string) (string, string) {
 	colors := strings.Split(colorCode, ";")
 	var fg, bg string
 	for _, color := range colors {
-		if strings.HasPrefix(color, "3") || strings.HasPrefix(color, "9") {
+		if strings.HasPrefix(color, "3") ||
+			strings.HasPrefix(color, "9") {
 			fg = color
-		} else if strings.HasPrefix(color, "4") || strings.HasPrefix(color, "10") {
+		} else if strings.HasPrefix(color, "4") ||
+			strings.HasPrefix(color, "10") {
 			bg = color
 		}
 	}
@@ -431,7 +443,8 @@ func imageToANSI(imagePath string) string {
 
 	for {
 		resized := gocv.NewMat()
-		gocv.Resize(img, &resized, image.Point{X: width * 2, Y: height * 2}, 0, 0, gocv.InterpolationLinear)
+		gocv.Resize(img, &resized, image.Point{X: width * 2, Y: height * 2},
+			0, 0, gocv.InterpolationLinear)
 
 		edges := detectEdges(resized)
 		ditheredImg := modifiedAtkinsonDither(resized, edges)
@@ -458,9 +471,12 @@ func imageToANSI(imagePath string) string {
 
 				if len(uniqueColors) > 2 && Shading {
 					// Handle the three-or-more-color case
-					fgColor, bgColor := chooseColorsFromNeighborhood(ditheredImg, y, x)
+					fgColor, bgColor := chooseColorsFromNeighborhood(
+						ditheredImg, y, x)
 					block := getBlockFromColors(colors, fgColor, bgColor)
-					ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgAnsi[colorFromANSI(bgColor)], string(block))
+					ansiImage += fmt.Sprintf("%s[%s;%sm%s",
+						ESC, fgColor, bgAnsi[colorFromANSI(bgColor)],
+						string(block))
 				} else {
 					// Handle the two-color case (or single color)
 					var fgColor, bgColor string
@@ -475,7 +491,9 @@ func imageToANSI(imagePath string) string {
 						} else if isForeground && bgColor == "" {
 							// Convert to background color
 							oldFgColor := colorFromANSI(color)
-							_, bgColor = rgbToANSI(uint8(oldFgColor>>16), uint8(oldFgColor>>8), uint8(oldFgColor), false)
+							_, bgColor = rgbToANSI(uint8(oldFgColor>>16),
+								uint8(oldFgColor>>8), uint8(oldFgColor),
+								false)
 							for i, c := range colors {
 								if c == color {
 									colors[i] = bgColor
@@ -484,17 +502,23 @@ func imageToANSI(imagePath string) string {
 						} else if isBackground && fgColor == "" {
 							// Convert to foreground color
 							oldBgColor := colorFromANSI(color)
-							_, fgColor = rgbToANSI(uint8(oldBgColor>>16), uint8(oldBgColor>>8), uint8(oldBgColor), true)
+							_, fgColor = rgbToANSI(uint8(oldBgColor>>16),
+								uint8(oldBgColor>>8),
+								uint8(oldBgColor),
+								true)
 							for i, c := range colors {
 								if c == color {
 									colors[i] = fgColor
 								}
 							}
 						} else {
-							// Determine if the color is closer to the foreground or background
+							// Determine if the color is closer to the
+							// foreground or background
 							oldColor := colorFromANSI(color)
-							fgDist := colorDistance(oldColor, colorFromANSI(fgColor))
-							bgDist := colorDistance(oldColor, colorFromANSI(bgColor))
+							fgDist := colorDistance(oldColor,
+								colorFromANSI(fgColor))
+							bgDist := colorDistance(oldColor,
+								colorFromANSI(bgColor))
 							var replacementColor string
 							if fgDist < bgDist {
 								replacementColor = fgColor
@@ -526,11 +550,14 @@ func imageToANSI(imagePath string) string {
 					}
 
 					if fgColor == "" {
-						ansiImage += fmt.Sprintf("%s[%sm%s", ESC, bgColor, string(block))
+						ansiImage += fmt.Sprintf("%s[%sm%s", ESC,
+							bgColor, string(block))
 					} else if bgColor == "" {
-						ansiImage += fmt.Sprintf("%s[%sm%s", ESC, fgColor, string(block))
+						ansiImage += fmt.Sprintf("%s[%sm%s", ESC,
+							fgColor, string(block))
 					} else {
-						ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgColor, string(block))
+						ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC,
+							fgColor, bgColor, string(block))
 					}
 				}
 			}
@@ -562,7 +589,8 @@ func getMostFrequentColors(colors []string) []string {
 	}
 	colorTuples := make([]colorTuple, 0, len(colorCount))
 	for color, count := range colorCount {
-		colorTuples = append(colorTuples, colorTuple{color, count})
+		colorTuples = append(colorTuples,
+			colorTuple{color, count})
 	}
 	// Sort the tuples by count
 	slices.SortFunc(colorTuples, func(a colorTuple, j colorTuple) int {
@@ -579,23 +607,35 @@ func getMostFrequentColors(colors []string) []string {
 }
 
 func main() {
-	inputFile := flag.String("input", "", "Path to the input image file (required)")
-	targetWidth := flag.Int("width", 100, "Target width of the output image")
-	maxChars := flag.Int("maxchars", 1048576, "Maximum number of characters in the output")
-	enableShading := flag.Bool("shading", false, "Enable shading for more detailed output")
-	separatePalette := flag.Bool("separate", false, "Use separate palettes for foreground and background colors")
-	outputFile := flag.String("output", "", "Path to save the output (if not specified, prints to stdout)")
-	quantization := flag.Int("quantization", 256, "Quantization factor")
-	blocksToSpace := flag.Bool("space", false, "Convert block characters to spaces")
-	scaleFactor := flag.Float64("scale", 3.0, "Scale factor for the output image")
-	maxLine := flag.Int("maxline", 0, "Maximum number of characters in a line, 0 for no limit")
+	inputFile := flag.String("input", "",
+		"Path to the input image file (required)")
+	targetWidth := flag.Int("width", 100,
+		"Target width of the output image")
+	maxChars := flag.Int("maxchars", 1048576,
+		"Maximum number of characters in the output")
+	enableShading := flag.Bool("shading", false,
+		"Enable shading for more detailed output")
+	edgeThreshold := flag.Int("edge", 100,
+		"Color difference threshold for edge detection skipping")
+	separatePalette := flag.Bool("separate", false,
+		"Use separate palettes for foreground and background colors")
+	outputFile := flag.String("output", "",
+		"Path to save the output (if not specified, prints to stdout)")
+	quantization := flag.Int("quantization", 256,
+		"Quantization factor")
+	blocksToSpace := flag.Bool("space", false,
+		"Convert block characters to spaces")
+	scaleFactor := flag.Float64("scale", 3.0,
+		"Scale factor for the output image")
+	maxLine := flag.Int("maxline", 0,
+		"Maximum number of characters in a line, 0 for no limit")
 
 	// Parse flags
 	flag.Parse()
 
 	// Validate required flags
 	if *inputFile == "" {
-		fmt.Println("Please provide the path to the input image using the -input flag")
+		fmt.Println("Please provide the image using the -input flag")
 		flag.PrintDefaults()
 		return
 	}
@@ -607,6 +647,7 @@ func main() {
 	Quantization = *quantization
 	ScaleFactor = *scaleFactor
 	BlocksToSpace = *blocksToSpace
+	EdgeThreshold = *edgeThreshold
 
 	if !*separatePalette {
 		bgAnsi = make(map[uint32]string)
@@ -652,7 +693,9 @@ func main() {
 		}
 		if !linesWithinLimit {
 			TargetWidth -= 2
-			print(fmt.Sprintf("Longest line: %d, too long, adjusting to %d width\n", lineWidth, TargetWidth))
+			print(fmt.Sprintf(
+				"Longest line: %d, adjusting to %d width\n",
+				lineWidth, TargetWidth))
 		} else {
 			print(fmt.Sprintf("Longest line: %d\n", widestLine))
 		}
