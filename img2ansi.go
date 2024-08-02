@@ -17,12 +17,13 @@ const (
 )
 
 var (
-	TargetWidth  = 100
-	ScaleFactor  = 3.0
-	MaxChars     = 1048576
-	Shading      = false
-	Quantization = 1
-	fgAnsi       = map[uint32]string{
+	TargetWidth   = 100
+	ScaleFactor   = 3.0
+	MaxChars      = 1048576
+	Shading       = false
+	Quantization  = 1
+	BlocksToSpace = false
+	fgAnsi        = map[uint32]string{
 		// Original colors
 		0x000000: "30", // BLACK
 		0xF0524F: "31", // RED
@@ -84,7 +85,28 @@ var (
 		'▟', // 1110 - Three quadrants: upper right, lower left, lower right
 		'█', // 1111 - Full block
 	}
+
+	unicodeToASCII = map[rune]byte{
+		' ': 32, // Space
+		//'▀': 223, // Upper half block
+		//'▌': 221, // Left half block (approximate)
+		//'▐': 222, // Right half block
+		//'▄': 220, // Lower half block
+		//'█': 219, // Full block
+	}
 )
+
+func replaceWithASCII(s string) string {
+	var result strings.Builder
+	for _, r := range s {
+		if ascii, ok := unicodeToASCII[r]; ok {
+			result.WriteByte(ascii)
+		} else {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
+}
 
 func init() {
 	//for color, code := range fgAnsi {
@@ -246,6 +268,17 @@ func compressANSI(ansiImage string) string {
 			colorCode, block := parts[0], parts[1]
 			fg, bg := extractColors(colorCode)
 
+			if BlocksToSpace && fg != "" && block == "█" && bg == "" {
+				fgRGB := colorFromANSI(fg)
+				// Check if fgRGB exists in the bgAnsi map
+				bgMatchFg, exists := bgAnsi[fgRGB]
+				if exists {
+					block = " " // Full block
+					bg = bgMatchFg
+					fg = ""
+				}
+			}
+
 			if fg != currentFg || bg != currentBg || block != currentBlock {
 				if count > 0 {
 					compressed.WriteString(formatANSICode(currentFg, currentBg, currentBlock, count))
@@ -264,21 +297,23 @@ func compressANSI(ansiImage string) string {
 		currentFg, currentBg = "", "" // Reset colors at end of line
 	}
 
-	return compressed.String()
+	return replaceWithASCII(compressed.String())
 }
 
 func formatANSICode(fg, bg, block string, count int) string {
 	var code strings.Builder
 	code.WriteString(ESC)
 	code.WriteByte('[')
-	if fg != "" {
-		code.WriteString(fg)
-		if bg != "" {
-			code.WriteByte(';')
+	if fg != "" || bg != "" {
+		if fg != "" {
+			code.WriteString(fg)
 		}
-	}
-	if bg != "" {
-		code.WriteString(bg)
+		if bg != "" {
+			if fg != "" {
+				code.WriteByte(';')
+			}
+			code.WriteString(bg)
+		}
 	}
 	code.WriteByte('m')
 	code.WriteString(strings.Repeat(block, count))
@@ -486,16 +521,13 @@ func imageToANSI(imagePath string) string {
 							colors[2] == fgColor,
 							colors[3] == fgColor,
 						)
-					} else if fgColor != "" {
-						block = '█' // Full block
 					} else {
-						block = ' ' // Empty space
+						block = '█' // Full block
 					}
 
 					if fgColor == "" {
-						ansiImage += fmt.Sprintf("%s[;%s", ESC, bgColor, string(block))
-					}
-					if bgColor == "" {
+						ansiImage += fmt.Sprintf("%s[%sm%s", ESC, bgColor, string(block))
+					} else if bgColor == "" {
 						ansiImage += fmt.Sprintf("%s[%sm%s", ESC, fgColor, string(block))
 					} else {
 						ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgColor, string(block))
@@ -551,9 +583,12 @@ func main() {
 	targetWidth := flag.Int("width", 100, "Target width of the output image")
 	maxChars := flag.Int("maxchars", 1048576, "Maximum number of characters in the output")
 	enableShading := flag.Bool("shading", false, "Enable shading for more detailed output")
+	separatePalette := flag.Bool("separate", false, "Use separate palettes for foreground and background colors")
 	outputFile := flag.String("output", "", "Path to save the output (if not specified, prints to stdout)")
 	quantization := flag.Int("quantization", 256, "Quantization factor")
+	blocksToSpace := flag.Bool("space", false, "Convert block characters to spaces")
 	scaleFactor := flag.Float64("scale", 3.0, "Scale factor for the output image")
+	maxLine := flag.Int("maxline", 0, "Maximum number of characters in a line, 0 for no limit")
 
 	// Parse flags
 	flag.Parse()
@@ -571,15 +606,57 @@ func main() {
 	Shading = *enableShading
 	Quantization = *quantization
 	ScaleFactor = *scaleFactor
+	BlocksToSpace = *blocksToSpace
+
+	if !*separatePalette {
+		bgAnsi = make(map[uint32]string)
+		for color, code := range fgAnsi {
+			if code[0] == '3' {
+				bgAnsi[color] = "4" + code[1:]
+			} else if code[0] == '9' {
+				bgAnsi[color] = "10" + code[1:]
+			}
+		}
+	}
 
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide the path to the image as an argument")
 		return
 	}
 
-	// Generate ANSI art
-	ansiArt := imageToANSI(*inputFile)
-	compressedArt := compressANSI(ansiArt)
+	var ansiArt string
+	var compressedArt string
+
+	linesWithinLimit := false
+	for !linesWithinLimit {
+		// Generate ANSI art
+		ansiArt = imageToANSI(*inputFile)
+		compressedArt = compressANSI(ansiArt)
+		// Count each line
+		lines := strings.Split(compressedArt, "\n")
+		if *maxLine == 0 {
+			break
+		}
+		linesWithinLimit = true
+		var widestLine int
+		var lineWidth int
+		for _, line := range lines {
+			lineWidth = len([]byte(line))
+			if lineWidth > widestLine {
+				widestLine = lineWidth
+			}
+			if lineWidth > *maxLine {
+				linesWithinLimit = false
+				break
+			}
+		}
+		if !linesWithinLimit {
+			TargetWidth -= 2
+			print(fmt.Sprintf("Longest line: %d, too long, adjusting to %d width\n", lineWidth, TargetWidth))
+		} else {
+			print(fmt.Sprintf("Longest line: %d\n", widestLine))
+		}
+	}
 
 	// Output result
 	if *outputFile != "" {
