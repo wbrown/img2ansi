@@ -20,10 +20,10 @@ var (
 	TargetWidth  = 100
 	ScaleFactor  = 3.0
 	MaxChars     = 1048576
-	Shading      = false
+	Shading      = true
 	Quantization = 1
 	fgAnsi       = map[uint32]string{
-		// Original colors (more likely to be selected)
+		//	// Original colors (more likely to be selected)
 		0x000000: "30", // BLACK
 		0xEB5156: "31", // RED
 		0x69953D: "32", // GREEN
@@ -32,7 +32,6 @@ var (
 		0x9F73BA: "35", // MAGENTA
 		0x48A0A2: "36", // CYAN
 		0x808080: "37", // WHITE
-
 		// Additional colors (less likely to be selected)
 		0x4D4D4D: "90", // BRIGHT BLACK (dark gray)
 		0xEF5357: "91", // BRIGHT RED (darker)
@@ -42,6 +41,26 @@ var (
 		0xDF84E7: "95", // BRIGHT MAGENTA (darker)
 		0x67E0E1: "96", // BRIGHT CYAN (darker)
 		0xC0C0C0: "97", // BRIGHT WHITE (light gray)
+
+		// Original colors
+		//0x000000: "30", // BLACK
+		//0xF0524F: "31", // RED
+		//0x5C962C: "32", // GREEN
+		//0xA68A0D: "33", // YELLOW
+		//0x3993D4: "34", // BLUE
+		//0xA771BF: "35", // MAGENTA
+		//0x00A3A3: "36", // CYAN
+		//0x808080: "37", // WHITE
+
+		// Bright colors
+		//0x575959: "90", // BRIGHT BLACK (dark gray)
+		//0xFF4050: "91", // BRIGHT RED (darker)
+		//0x4FC414: "92", // BRIGHT GREEN (darker)
+		//0xE5BF00: "93", // BRIGHT YELLOW (darker)
+		//0x1FB0FF: "94", // BRIGHT BLUE (darker)
+		//0xED7EED: "95", // BRIGHT MAGENTA (darker)
+		//0x00E5E5: "96", // BRIGHT CYAN (darker)
+		//0xFFFFFF: "97", // BRIGHT WHITE (light gray)
 	}
 
 	bgAnsi = make(map[uint32]string)
@@ -76,8 +95,31 @@ func init() {
 	}
 }
 
-func rgbToANSI(r, g, b uint8, fg bool) (uint32, string) {
-	color := uint32(r)<<16 | uint32(g)<<8 | uint32(b)
+type RGB struct {
+	r, g, b uint8
+}
+
+func (rgb RGB) toUint32() uint32 {
+	return uint32(rgb.r)<<16 | uint32(rgb.g)<<8 | uint32(rgb.b)
+}
+
+func rgbFromVecb(color gocv.Vecb) RGB {
+	return RGB{
+		r: color[2],
+		g: color[1],
+		b: color[0],
+	}
+}
+
+func rgbFromUint32(color uint32) RGB {
+	return RGB{
+		r: uint8(color >> 16),
+		g: uint8(color >> 8),
+		b: uint8(color),
+	}
+}
+
+func (rgb RGB) rgbToANSI(fg bool) (RGB, string) {
 	colorDict := fgAnsi
 	if !fg {
 		colorDict = bgAnsi
@@ -85,26 +127,32 @@ func rgbToANSI(r, g, b uint8, fg bool) (uint32, string) {
 
 	minDiff := uint32(math.MaxUint32)
 	var bestCode string
-	var bestColor uint32
+	var bestColor RGB
 
 	for k, v := range colorDict {
-		diff := colorDistance(color, k)
+		diff := rgb.colorDistance(rgbFromUint32(k))
 		if diff < minDiff {
 			minDiff = diff
 			bestCode = v
-			bestColor = k
+			bestColor = rgbFromUint32(k)
 		}
 	}
 
 	return bestColor, bestCode
 }
 
-func colorDistance(c1, c2 uint32) uint32 {
-	r1, g1, b1 := uint8(c1>>16), uint8(c1>>8), uint8(c1)
-	r2, g2, b2 := uint8(c2>>16), uint8(c2>>8), uint8(c2)
-	return uint32(math.Pow(float64(r1)-float64(r2), 2) +
-		math.Pow(float64(g1)-float64(g2), 2) +
-		math.Pow(float64(b1)-float64(b2), 2))
+func (rgb RGB) colorDistance(c2 RGB) uint32 {
+	return uint32(math.Pow(float64(rgb.r)-float64(c2.r), 2) +
+		math.Pow(float64(rgb.g)-float64(c2.g), 2) +
+		math.Pow(float64(rgb.b)-float64(c2.b), 2))
+}
+
+func (rgb RGB) dithError(c2 RGB) [3]float64 {
+	return [3]float64{
+		float64(rgb.r) - float64(c2.r),
+		float64(rgb.g) - float64(c2.g),
+		float64(rgb.b) - float64(c2.b),
+	}
 }
 
 func detectEdges(img gocv.Mat) gocv.Mat {
@@ -119,12 +167,12 @@ func detectEdges(img gocv.Mat) gocv.Mat {
 	return edges
 }
 
-func quantizeColor(c gocv.Vecb) gocv.Vecb {
+func (rgb RGB) quantizeColor() RGB {
 	qFactor := 256 / float64(Quantization)
-	return gocv.Vecb{
-		uint8(math.Round(float64(c[0])/qFactor) * qFactor),
-		uint8(math.Round(float64(c[1])/qFactor) * qFactor),
-		uint8(math.Round(float64(c[2])/qFactor) * qFactor),
+	return RGB{
+		uint8(math.Round(float64(rgb.r)/qFactor) * qFactor),
+		uint8(math.Round(float64(rgb.g)/qFactor) * qFactor),
+		uint8(math.Round(float64(rgb.b)/qFactor) * qFactor),
 	}
 }
 
@@ -134,25 +182,19 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			oldPixel := img.GetVecbAt(y, x)
-			quantizedPixel := quantizeColor(oldPixel)
-			r, g, b := quantizedPixel[2], quantizedPixel[1], quantizedPixel[0]
-
-			newColor, _ := rgbToANSI(r, g, b, true)
+			oldPixel := rgbFromVecb(img.GetVecbAt(y, x))
+			quantizedPixel := oldPixel.quantizeColor()
+			newColor, _ := quantizedPixel.rgbToANSI(true)
 			// Store full color information
-			newImage.SetUCharAt(y, x*3+2, uint8(newColor>>16))
-			newImage.SetUCharAt(y, x*3+1, uint8(newColor>>8))
-			newImage.SetUCharAt(y, x*3, uint8(newColor&0xFF))
+			newImage.SetUCharAt(y, x*3+2, newColor.r)
+			newImage.SetUCharAt(y, x*3+1, newColor.g)
+			newImage.SetUCharAt(y, x*3, newColor.b)
 
-			if edges.GetUCharAt(y, x) > 0 || colorDistance(uint32(r)<<16|uint32(g)<<8|uint32(b), newColor) < 1250 {
+			if edges.GetUCharAt(y, x) > 0 || quantizedPixel.colorDistance(newColor) < 1250 {
 				continue
 			}
 
-			dithError := [3]float64{
-				float64(r) - float64((newColor>>16)&0xFF),
-				float64(g) - float64((newColor>>8)&0xFF),
-				float64(b) - float64(newColor&0xFF),
-			}
+			dithError := oldPixel.dithError(newColor)
 
 			for i := 0; i < 3; i++ {
 				dithError[i] /= 8
@@ -179,20 +221,26 @@ func modifiedAtkinsonDither(img gocv.Mat, edges gocv.Mat) gocv.Mat {
 	return newImage
 }
 
-func colorFromANSI(ansiCode string) uint32 {
-	for color, code := range fgAnsi {
+func colorFromANSI(ansiCode string) RGB {
+	var table map[uint32]string
+	if colorIsForeground(ansiCode) {
+		table = fgAnsi
+	} else {
+		table = bgAnsi
+	}
+	for color, code := range table {
 		if code == ansiCode {
-			return color
+			return rgbFromUint32(color)
 		}
 	}
-	return 0 // Default to black if not found
+	return RGB{}
 }
 
 func getANSICode(img gocv.Mat, y, x int) string {
-	r := img.GetUCharAt(y, x*3+2)
-	g := img.GetUCharAt(y, x*3+1)
-	b := img.GetUCharAt(y, x*3)
-	_, ansiCode := rgbToANSI(r, g, b, true)
+	rgb := RGB{img.GetUCharAt(y, x*3+2),
+		img.GetUCharAt(y, x*3+1),
+		img.GetUCharAt(y, x*3)}
+	_, ansiCode := rgb.rgbToANSI(true)
 	return ansiCode
 }
 
@@ -275,9 +323,6 @@ func saveToPNG(img gocv.Mat, filename string) error {
 	return nil
 }
 
-// 		rowCt := len(line) + len(fmt.Sprintf("%s[0m\n", ESC))
-//		compressed.WriteString(fmt.Sprintf("%s[0m %d\n", ESC, rowCt))
-
 func getBlock(upperLeft, upperRight, lowerLeft, lowerRight bool) rune {
 	index := 0
 	if upperLeft {
@@ -299,16 +344,26 @@ func averageColor(colors []string) string {
 	var r, g, b, count float64
 	for _, colorStr := range colors {
 		color := colorFromANSI(colorStr)
-		r += float64((color >> 16) & 0xFF)
-		g += float64((color >> 8) & 0xFF)
-		b += float64(color & 0xFF)
+		r += float64(color.r & 0xFF)
+		g += float64(color.g & 0xFF)
+		b += float64(color.b & 0xFF)
 		count++
 	}
-	avgR := uint8(r / count)
-	avgG := uint8(g / count)
-	avgB := uint8(b / count)
-	_, ansiCode := rgbToANSI(avgR, avgG, avgB, true)
+	avgRgb := RGB{
+		uint8(r / count),
+		uint8(g / count),
+		uint8(b / count),
+	}
+	_, ansiCode := avgRgb.rgbToANSI(true)
 	return ansiCode
+}
+
+func colorIsForeground(color string) bool {
+	return strings.HasPrefix(color, "3") || strings.HasPrefix(color, "9")
+}
+
+func colorIsBackground(color string) bool {
+	return strings.HasPrefix(color, "4") || strings.HasPrefix(color, "10")
 }
 
 func chooseColorsFromNeighborhood(img gocv.Mat, y, x int) (string, string) {
@@ -328,9 +383,36 @@ func chooseColorsFromNeighborhood(img gocv.Mat, y, x int) (string, string) {
 	sortedColors := getMostFrequentColors(mapToSlice(colorCounts))
 	if len(sortedColors) == 1 {
 		return sortedColors[0], sortedColors[0]
-	} else {
-		return sortedColors[0], sortedColors[1]
 	}
+
+	firstColorIsFg := colorIsForeground(sortedColors[0])
+	secondColorIsFg := colorIsForeground(sortedColors[1])
+	if firstColorIsFg == secondColorIsFg {
+		bgOrFg := !(firstColorIsFg && secondColorIsFg)
+		secondColorCandidate := colorFromANSI(sortedColors[1])
+		_, sortedColors[1] = secondColorCandidate.rgbToANSI(bgOrFg)
+	}
+	return sortedColors[0], sortedColors[1]
+}
+
+func resolveColorPair(first, second string) (string, string) {
+	firstColorIsFg := colorIsForeground(first)
+	secondColorIsFg := colorIsForeground(second)
+	if firstColorIsFg == secondColorIsFg {
+		bgOrFg := !(firstColorIsFg && secondColorIsFg)
+		secondColorCandidate := colorFromANSI(second)
+		_, second = secondColorCandidate.rgbToANSI(bgOrFg)
+	}
+	if colorIsForeground(first) && colorIsBackground(second) {
+		return first, second
+	} else if colorIsForeground(second) && colorIsBackground(first) {
+		return second, first
+	} else if colorIsForeground(first) {
+		return first, second
+	} else if colorIsForeground(second) {
+		return first, second
+	}
+	return first, second
 }
 
 func getBlockFromColors(colors []string, fgColor, bgColor string) rune {
@@ -350,6 +432,65 @@ func mapToSlice(m map[string]int) []string {
 		}
 	}
 	return result
+}
+
+func simpleResolveBlock(colors []string) (fgColor, bgColor string, ansiBlock rune) {
+	// Handle the two-color case (or single color)
+	dominantColors := getMostFrequentColors(colors)
+	fgColor = dominantColors[0]
+	var block rune
+
+	if len(dominantColors) > 1 {
+		bgCandidate := colorFromANSI(dominantColors[1])
+		bgColor = bgAnsi[bgCandidate.toUint32()]
+		block = getBlock(
+			colors[0] == fgColor,
+			colors[1] == fgColor,
+			colors[2] == fgColor,
+			colors[3] == fgColor,
+		)
+	} else {
+		bgColor = "40" // Default to black background for single color
+		block = '█'    // Full block
+	}
+	return fgColor, bgColor, block
+}
+
+func resolveBlock(colors []string) (fgColor, bgColor string, ansiBlock rune) {
+	uniqueColors := make(map[string]int)
+	for _, c := range colors {
+		uniqueColors[c]++
+	}
+
+	//if len(uniqueColors) > 2 && Shading {
+	//	// Handle the three-or-more-color case
+	//	fgColor, bgColor := chooseColorsFromNeighborhood(ditheredImg, y, x)
+	//	block := getBlockFromColors(colors, fgColor, bgColor)
+	//	ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgAnsi[colorFromANSI(bgColor)], string(block))
+	// We need to resolve the following scenarios:
+	// 1. >1 colors are foreground, >1 are background
+	// 2. Three or four different colors
+	//block := mergeBlockColors(colors)
+	block := colors
+
+	// At this point, we should only have one or two colors
+	dominantColors := getMostFrequentColors(block)
+	fgColor = dominantColors[0]
+
+	if len(dominantColors) > 1 {
+		fgColor, bgColor = resolveColorPair(dominantColors[0],
+			dominantColors[1])
+		ansiBlock = getBlock(
+			colors[0] == fgColor,
+			colors[1] == fgColor,
+			colors[2] == fgColor,
+			colors[3] == fgColor,
+		)
+	} else {
+		fgColor = dominantColors[0]
+		ansiBlock = '█' // Full block
+	}
+	return fgColor, bgColor, ansiBlock
 }
 
 func imageToANSI(imagePath string) string {
@@ -390,33 +531,20 @@ func imageToANSI(imagePath string) string {
 					uniqueColors[c]++
 				}
 
-				if len(uniqueColors) > 2 && Shading {
+				var fgColor, bgColor string
+				var ansiStr string
+				if len(uniqueColors) > 2 {
 					// Handle the three-or-more-color case
-					fgColor, bgColor := chooseColorsFromNeighborhood(ditheredImg, y, x)
-					block := getBlockFromColors(colors, fgColor, bgColor)
-					ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgAnsi[colorFromANSI(bgColor)], string(block))
+					fgColor, bgColor = chooseColorsFromNeighborhood(ditheredImg, y, x)
+					ansiStr = string(getBlockFromColors(colors, fgColor, bgColor))
+					bgRgb := colorFromANSI(bgColor)
+					bgColor = bgAnsi[bgRgb.toUint32()]
 				} else {
-					// Handle the two-color case (or single color)
-					dominantColors := getMostFrequentColors(colors)
-					fgColor := dominantColors[0]
-					var bgColor string
-					var block rune
-
-					if len(dominantColors) > 1 {
-						bgColor = bgAnsi[colorFromANSI(dominantColors[1])]
-						block = getBlock(
-							colors[0] == fgColor,
-							colors[1] == fgColor,
-							colors[2] == fgColor,
-							colors[3] == fgColor,
-						)
-					} else {
-						bgColor = "40" // Default to black background for single color
-						block = '█'    // Full block
-					}
-
-					ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgColor, string(block))
+					var ansiBlock rune
+					fgColor, bgColor, ansiBlock = simpleResolveBlock(colors)
+					ansiStr = string(ansiBlock)
 				}
+				ansiImage += fmt.Sprintf("%s[%s;%sm%s", ESC, fgColor, bgColor, ansiStr)
 			}
 
 			ansiImage += fmt.Sprintf("%s[0m\n", ESC)
@@ -460,6 +588,97 @@ func getMostFrequentColors(colors []string) []string {
 	}
 
 	return dominantColors
+}
+
+func mergeColors(block []string) []string {
+	for idx := 0; idx < len(block)-1; idx++ {
+		firstColor := colorFromANSI(block[idx])
+		secondColor := colorFromANSI(block[idx+1])
+		if firstColor == secondColor {
+			block[idx+1] = block[idx]
+		}
+	}
+	return block
+}
+
+func mergeBlockColors(block []string) []string {
+	// We need to scan our frequent colors,  determine if there are
+	// colors that are the same, and merge them
+	rgbColors := make([]RGB, 0, len(block))
+	for idx := 0; idx < len(block); idx++ {
+		rgbColors = append(rgbColors, colorFromANSI(block[idx]))
+	}
+	// Now that we've mapped to actual RGB colors, we can determine
+	// if we have two or more colors that are the same
+	for idx := 0; idx < len(rgbColors); idx++ {
+		for jdx := idx + 1; jdx < len(rgbColors); jdx++ {
+			if jdx == idx {
+				continue
+			}
+			if rgbColors[idx].toUint32() == rgbColors[jdx].toUint32() {
+				block[jdx] = block[idx]
+			} else {
+				block[jdx] = block[jdx]
+			}
+		}
+	}
+
+	block = mergeColors(block)
+	freqColors := getMostFrequentColors(block)
+	if len(freqColors) == 1 {
+		return block
+	} else {
+		block = mergeColors(block)
+		freqColors = getMostFrequentColors(block)
+		if len(freqColors) == 1 {
+			return block
+		}
+		if len(freqColors) == 2 {
+			if colorIsForeground(freqColors[0]) && colorIsBackground(freqColors[1]) {
+				return block
+			} else if colorIsForeground(freqColors[1]) && colorIsBackground(freqColors[0]) {
+				return block
+			}
+		}
+
+		freqColors = getMostFrequentColors(block)
+
+		fg, bg := resolveColorPair(freqColors[0], freqColors[1])
+		for idx := 0; idx < len(block); idx++ {
+			if block[idx] == freqColors[0] {
+				block[idx] = fg
+			} else if block[idx] == freqColors[1] {
+				block[idx] = bg
+			}
+		}
+		block = mergeColors(block)
+		freqColors = getMostFrequentColors(block)
+		if len(freqColors) < 3 {
+			return block
+		} else {
+			fg, bg = resolveColorPair(freqColors[0], freqColors[1])
+			// We still have three or more colors, so we need to perform
+			// a nearest color match to either fg or bg
+			for idx := 0; idx < len(block); idx++ {
+				currAnsi := block[idx]
+				currColor := colorFromANSI(currAnsi)
+				if currAnsi == fg || currAnsi == bg {
+					continue
+				}
+				// Determine if currAnsi is closer to fg or bg
+				fgColor := colorFromANSI(fg)
+				bgColor := colorFromANSI(bg)
+				fgDist := fgColor.colorDistance(currColor)
+				bgDist := bgColor.colorDistance(currColor)
+				if fgDist < bgDist {
+					block[idx] = fg
+				} else {
+					block[idx] = bg
+				}
+			}
+		}
+	}
+	return block
 }
 
 func main() {
