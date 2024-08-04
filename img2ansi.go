@@ -4,13 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"gocv.io/x/gocv"
-	"image"
-	"image/color"
-	"image/png"
 	_ "image/png"
 	"math"
 	"os"
-	"strings"
 )
 
 const (
@@ -43,51 +39,11 @@ var (
 		0x67E0E1: "96", // BRIGHT CYAN (darker)
 		0xC0C0C0: "97", // BRIGHT WHITE (light gray)
 	}
-	// Below are measured from the terminal using a color picker
+	bgAnsi        = make(map[uint32]string)
 	ansiOverrides = map[uint32]string{}
-	//ansiOverrides = map[uint32]string{
-	//	0x000000: "30", // BLACK
-	//	0xB93018: "31", // RED
-	//	0x52BF37: "32", // GREEN
-	//	0xFFFC7F: "33", // YELLOW
-	//	0x0D23BF: "34", // BLUE
-	//	0xBA3FC0: "35", // MAGENTA
-	//	0x53C2C5: "36", // CYAN
-	//	0xC8C7C7: "37", // WHITE
-	//	0x686868: "90", // BRIGHT BLACK (dark gray)
-	//	0xF1776D: "91", // BRIGHT RED (darker)
-	//	0x8DF67A: "92", // BRIGHT GREEN (darker)
-	//	0xFEFC7F: "93", // BRIGHT YELLOW (darker)
-	//	0x6A71F6: "94", // BRIGHT BLUE (darker)
-	//	0xF07FF8: "95", // BRIGHT MAGENTA (darker)
-	//	0x8EFAFD: "96", // BRIGHT CYAN (darker)
-	//	0xFFFFFF: "97", // BRIGHT WHITE (light gray)
-	//}
-
-	// Original colors
-	//0x000000: "30", // BLACK
-	//0xF0524F: "31", // RED
-	//0x5C962C: "32", // GREEN
-	//0xA68A0D: "33", // YELLOW
-	//0x3993D4: "34", // BLUE
-	//0xA771BF: "35", // MAGENTA
-	//0x00A3A3: "36", // CYAN
-	//0x808080: "37", // WHITE
-
-	// Bright colors
-	//0x575959: "90", // BRIGHT BLACK (dark gray)
-	//0xFF4050: "91", // BRIGHT RED (darker)
-	//0x4FC414: "92", // BRIGHT GREEN (darker)
-	//0xE5BF00: "93", // BRIGHT YELLOW (darker)
-	//0x1FB0FF: "94", // BRIGHT BLUE (darker)
-	//0xED7EED: "95", // BRIGHT MAGENTA (darker)
-	//0x00E5E5: "96", // BRIGHT CYAN (darker)
-	//0xFFFFFF: "97", // BRIGHT WHITE (light gray)
-
-	bgAnsi = make(map[uint32]string)
 
 	blocks = []struct {
-		Char rune
+		Rune rune
 		Quad Quadrants
 	}{
 		{' ', Quadrants{false, false, false, false}}, // Empty space
@@ -142,11 +98,11 @@ func init() {
 	}
 }
 
-// BlockChar represents a 2x2 block of characters with foreground and
+// BlockRune represents a 2x2 block of runes with foreground and
 // background colors mapped in the ANSI color space. The struct contains
 // a rune representing the block character, and two RGB colors representing
 // the foreground and background colors of the block.
-type BlockChar struct {
+type BlockRune struct {
 	Rune rune
 	FG   RGB
 	BG   RGB
@@ -164,93 +120,17 @@ type Quadrants struct {
 	BottomRight bool
 }
 
-// RGB represents a color in the RGB color space with 8-bit channels,
-// where each channel ranges from 0 to 255. The RGB color space is
-// additive, meaning that colors are created by adding together the
-// red, green, and blue channels.
-type RGB struct {
-	r, g, b uint8
-}
-
-// toUint32 converts an RGB color to a 32-bit unsigned integer
-func (r RGB) toUint32() uint32 {
-	return uint32(r.r)<<16 | uint32(r.g)<<8 | uint32(r.b)
-}
-
-// rgbFromVecb converts a gocv.Vecb to an RGB color
-func rgbFromVecb(color gocv.Vecb) RGB {
-	return RGB{
-		r: color[2],
-		g: color[1],
-		b: color[0],
-	}
-}
-
-// rgbFromUint32 converts a 32-bit unsigned integer to an RGB color
-func rgbFromUint32(color uint32) RGB {
-	return RGB{
-		r: uint8(color >> 16),
-		g: uint8(color >> 8),
-		b: uint8(color),
-	}
-}
-
-// dithError calculates the error between two RGB colors in the RGB color
-// space. It returns a 3-element array of floating-point numbers representing
-// the error in the red, green, and blue channels, respectively.
-func (r RGB) dithError(c2 RGB) [3]float64 {
-	return [3]float64{
-		float64(r.r) - float64(c2.r),
-		float64(r.g) - float64(c2.g),
-		float64(r.b) - float64(c2.b),
-	}
-}
-
-// quantizeColor quantizes an RGB color by rounding each channel to the
-// nearest multiple of the quantization factor. The function returns the
-// quantized RGB color.
-func (r RGB) quantizeColor() RGB {
-	qFactor := 256 / float64(Quantization)
-	return RGB{
-		uint8(math.Round(float64(r.r)/qFactor) * qFactor),
-		uint8(math.Round(float64(r.g)/qFactor) * qFactor),
-		uint8(math.Round(float64(r.b)/qFactor) * qFactor),
-	}
-}
-
-// subtract subtracts the RGB channels of another RGB color from the
-// corresponding channels of the current RGB color. The function returns
-// a new RGB color with the result of the subtraction.
-func (r RGB) subtract(other RGB) RGB {
-	return RGB{
-		r: uint8(math.Max(0, float64(r.r)-float64(other.r))),
-		g: uint8(math.Max(0, float64(r.g)-float64(other.g))),
-		b: uint8(math.Max(0, float64(r.b)-float64(other.b))),
-	}
-}
-
-// colorDistance calculates the Euclidean distance between two RGB colors
-// in the RGB color space. The function returns the distance as a floating-
-// point number.
-func (r RGB) colorDistance(other RGB) float64 {
-	return math.Sqrt(float64(
-		(int(r.r)-int(other.r))*(int(r.r)-int(other.r)) +
-			(int(r.g)-int(other.g))*(int(r.g)-int(other.g)) +
-			(int(r.b)-int(other.b))*(int(r.b)-int(other.b)),
-	))
-}
-
 // modifiedAtkinsonDitherForBlocks applies the modified Atkinson dithering
 // algorithm to an image operating on 2x2 blocks rather than pixels. The
 // function takes an input image and a binary image with edges detected. It
-// returns a BlockChar representation with the Atkinson dithering algorithm
+// returns a BlockRune representation with the Atkinson dithering algorithm
 // applied, with colors quantized to the nearest ANSI color.
-func modifiedAtkinsonDitherForBlocks(img gocv.Mat, edges gocv.Mat) [][]BlockChar {
+func modifiedAtkinsonDitherForBlocks(img gocv.Mat, edges gocv.Mat) [][]BlockRune {
 	height, width := img.Rows(), img.Cols()
 	blockHeight, blockWidth := height/2, width/2
-	result := make([][]BlockChar, blockHeight)
+	result := make([][]BlockRune, blockHeight)
 	for i := range result {
-		result[i] = make([]BlockChar, blockWidth)
+		result[i] = make([]BlockRune, blockWidth)
 	}
 
 	for by := 0; by < blockHeight; by++ {
@@ -270,11 +150,11 @@ func modifiedAtkinsonDitherForBlocks(img gocv.Mat, edges gocv.Mat) [][]BlockChar
 				edges.GetUCharAt(by*2+1, bx*2+1) > 128
 
 			// Find the best representation for this block
-			bestChar, fgColor, bgColor := findBestBlockRepresentation(block, isEdge)
+			bestRune, fgColor, bgColor := findBestBlockRepresentation(block, isEdge)
 
 			// Store the result
-			result[by][bx] = BlockChar{
-				Rune: bestChar,
+			result[by][bx] = BlockRune{
+				Rune: bestRune,
 				FG:   fgColor,
 				BG:   bgColor,
 			}
@@ -283,7 +163,7 @@ func modifiedAtkinsonDitherForBlocks(img gocv.Mat, edges gocv.Mat) [][]BlockChar
 			for i, blockColor := range block {
 				y, x := by*2+i/2, bx*2+i%2
 				var targetColor RGB
-				if (bestChar & (1 << (3 - i))) != 0 {
+				if (bestRune & (1 << (3 - i))) != 0 {
 					targetColor = fgColor
 				} else {
 					targetColor = bgColor
@@ -303,7 +183,7 @@ func modifiedAtkinsonDitherForBlocks(img gocv.Mat, edges gocv.Mat) [][]BlockChar
 // representation, the foreground color, and the background color for the
 // block.
 func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
-	var bestChar rune
+	var bestRune rune
 	var bestFG, bestBG RGB
 	minError := math.MaxFloat64
 
@@ -318,7 +198,7 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 				colorError := calculateBlockError(block, b.Quad, fgRgb, bgRgb, isEdge)
 				if colorError < minError {
 					minError = colorError
-					bestChar = b.Char
+					bestRune = b.Rune
 					bestFG = fgRgb
 					bestBG = bgRgb
 				}
@@ -326,7 +206,7 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 		}
 	}
 
-	return bestChar, bestFG, bestBG
+	return bestRune, bestFG, bestBG
 }
 
 // calculateBlockError calculates the error between a 2x2 block of colors
@@ -354,31 +234,13 @@ func calculateBlockError(block [4]RGB, quad Quadrants, fg, bg RGB, isEdge bool) 
 	return colorError
 }
 
-// drawBlock draws a 2x2 block of a rune with the given foreground and
-// background colors at the specified position in an image. The function
-// takes a pointer to an image, the x and y coordinates of the block, and
-// the block character to draw.
-func drawBlock(img *image.RGBA, x, y int, block BlockChar) {
-	quad := getQuadrantsForRune(block.Rune)
-	quadrants := [4]bool{quad.TopLeft, quad.TopRight, quad.BottomLeft, quad.BottomRight}
-
-	for i := 0; i < 4; i++ {
-		dx, dy := i%2, i/2
-		if quadrants[i] {
-			img.Set(x+dx, y+dy, color.RGBA{block.FG.r, block.FG.g, block.FG.b, 255})
-		} else {
-			img.Set(x+dx, y+dy, color.RGBA{block.BG.r, block.BG.g, block.BG.b, 255})
-		}
-	}
-}
-
 // getQuadrantsForRune returns the quadrants for a given rune character.
 // The function takes a rune character and returns the quadrants for the
 // corresponding block character, or an empty Quadrants struct if the
 // character is not found.
 func getQuadrantsForRune(char rune) Quadrants {
 	for _, b := range blocks {
-		if b.Char == char {
+		if b.Rune == char {
 			return b.Quad
 		}
 	}
@@ -413,221 +275,6 @@ func distributeError(img gocv.Mat, y, x int, error RGB, isEdge bool) {
 	diffuseError(y+1, x-1, 3.0/16.0)
 	diffuseError(y+1, x, 5.0/16.0)
 	diffuseError(y+1, x+1, 1.0/16.0)
-}
-
-// compressANSI compresses an ANSI image by combining adjacent blocks with
-// the same foreground and background colors. The function takes an ANSI
-// image as a string and returns the compressed ANSI image as a string.
-func compressANSI(ansiImage string) string {
-	var compressed strings.Builder
-	var currentFg, currentBg, currentBlock string
-	var count int
-
-	lines := strings.Split(ansiImage, "\n")
-	for _, line := range lines {
-		segments := strings.Split(line, "\u001b[")
-		for _, segment := range segments {
-			if segment == "" {
-				continue
-			}
-			parts := strings.SplitN(segment, "m", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			colorCode, block := parts[0], parts[1]
-			fg, bg := extractColors(colorCode)
-
-			// Optimize full block representation
-			if block == "█" {
-				bg = ""
-			} else if block == " " {
-				fg = ""
-			}
-
-			if fg != currentFg || bg != currentBg || block != currentBlock {
-				if count > 0 {
-					compressed.WriteString(
-						formatANSICode(currentFg, currentBg, currentBlock, count))
-				}
-				currentFg, currentBg, currentBlock = fg, bg, block
-				count = 1
-			} else {
-				count++
-			}
-		}
-		if count > 0 {
-			compressed.WriteString(
-				formatANSICode(currentFg, currentBg, currentBlock, count))
-		}
-		compressed.WriteString(fmt.Sprintf("%s[0m\n", ESC))
-		count = 0
-		currentFg, currentBg = "", "" // Reset colors at end of line
-	}
-
-	return compressed.String()
-}
-
-// formatANSICode formats an ANSI color code with the given foreground and
-// background colors, block character, and count. The function returns the
-// ANSI color code as a string, with the foreground and background colors
-// formatted as ANSI color codes, the block character repeated count times.
-func formatANSICode(fg, bg, block string, count int) string {
-	var code strings.Builder
-	code.WriteString(ESC)
-	code.WriteByte('[')
-	if fg != "" {
-		code.WriteString(fg)
-		if bg != "" {
-			code.WriteByte(';')
-		}
-	}
-	if bg != "" {
-		code.WriteString(bg)
-	}
-	code.WriteByte('m')
-	code.WriteString(strings.Repeat(block, count))
-	return code.String()
-}
-
-// extractColors extracts the foreground and background color codes from
-// an ANSI color code. The function takes an ANSI color code as a string
-// and returns the foreground and background color codes as strings.
-func extractColors(colorCodes string) (fg string, bg string) {
-	colors := strings.Split(colorCodes, ";")
-	for _, colorCode := range colors {
-		if colorIsForeground(colorCode) {
-			fg = colorCode
-		} else if colorIsBackground(colorCode) {
-			bg = colorCode
-		}
-	}
-	return fg, bg
-}
-
-// saveBlocksToPNG saves a 2D array of BlockChar structs to a PNG file.
-// The function takes a 2D array of BlockChar structs and a filename as
-// strings, and returns an error if the file cannot be saved.
-func saveBlocksToPNG(blocks [][]BlockChar, filename string) error {
-	height, width := len(blocks)*2, len(blocks[0])*2
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
-
-	for y, row := range blocks {
-		for x, block := range row {
-			drawBlock(img, x*2, y*2, block)
-		}
-	}
-
-	f, createErr := os.Create(filename)
-	if createErr != nil {
-		return createErr
-	}
-	defer func(f *os.File) {
-		closeErr := f.Close()
-		if closeErr != nil {
-			println("Error closing block PNG file")
-		}
-	}(f)
-
-	return png.Encode(f, img)
-}
-
-// saveToPNG saves an image to a PNG file. The function takes an image as
-// a gocv.Mat and a filename as a string, and returns an error if the image
-// cannot be saved.
-func saveToPNG(img gocv.Mat, filename string) error {
-	success := gocv.IMWrite(filename, img)
-	if !success {
-		return fmt.Errorf("failed to write image to file: %s", filename)
-	}
-	return nil
-}
-
-// colorIsForeground returns true if the ANSI color code corresponds to a
-// foreground color, and false otherwise. The function takes an ANSI color
-// code as a string and returns true if the color is a foreground color, and
-// false if it is a background color.
-func colorIsForeground(color string) bool {
-	return strings.HasPrefix(color, "3") ||
-		strings.HasPrefix(color, "9")
-}
-
-// colorIsBackground returns true if the ANSI color code corresponds to a
-// background color, and false otherwise. The function takes an ANSI color
-// code as a string and returns true if the color is a background color, and
-// false if it is a foreground color.
-func colorIsBackground(color string) bool {
-	return strings.HasPrefix(color, "4") ||
-		strings.HasPrefix(color, "10")
-}
-
-// renderToAnsi renders a 2D array of BlockChar structs to an ANSI string.
-// It does not perform any compression or optimization.
-func renderToAnsi(blocks [][]BlockChar) string {
-	var sb strings.Builder
-
-	for _, row := range blocks {
-		for _, block := range row {
-			fgCode := fgAnsi[block.FG.toUint32()]
-			bgCode := bgAnsi[block.BG.toUint32()]
-
-			sb.WriteString(fmt.Sprintf("\x1b[%s;%sm", fgCode, bgCode))
-			sb.WriteRune(block.Rune)
-		}
-		// Reset colors at the end of each line and add a newline
-		sb.WriteString("\x1b[0m\n")
-	}
-
-	return sb.String()
-}
-
-// prepareForANSI prepares an image for conversion to ANSI art. The function
-// takes an input image, the target width and height for the output image, and
-// returns the resized image and the edges detected in the image.
-func prepareForANSI(img gocv.Mat, width, height int) (resized, edges gocv.Mat) {
-	intermediate := gocv.NewMat()
-	resized = gocv.NewMat()
-	edges = gocv.NewMat()
-
-	// Use area interpolation for downscaling to an intermediate size
-	intermediateWidth := width * 4 // or another multiplier that gives results
-	intermediateHeight := height * 4
-	gocv.Resize(img,
-		&intermediate,
-		image.Point{X: intermediateWidth,
-			Y: intermediateHeight},
-		0, 0,
-		gocv.InterpolationArea)
-
-	// Detect edges on the intermediate image
-	gray := gocv.NewMat()
-	gocv.CvtColor(intermediate, &gray, gocv.ColorBGRToGray)
-	gocv.Canny(gray, &edges, 50, 150) // Adjust thresholds as needed
-
-	// Resize both the intermediate image and the edges to the final size
-	resizedPoint := image.Point{X: width * 2, Y: height * 2}
-	gocv.Resize(intermediate, &resized, resizedPoint, 0, 0,
-		gocv.InterpolationArea)
-	gocv.Resize(edges, &edges, resizedPoint, 0, 0,
-		gocv.InterpolationLinear)
-
-	// 4. Apply a very mild sharpening to the resized image
-	kernel := gocv.NewMatWithSize(3, 3, gocv.MatTypeCV32F)
-	kernel.SetFloatAt(0, 0, 0)
-	kernel.SetFloatAt(0, 1, -0.5)
-	kernel.SetFloatAt(0, 2, 0)
-	kernel.SetFloatAt(1, 0, -0.5)
-	kernel.SetFloatAt(1, 1, 3)
-	kernel.SetFloatAt(1, 2, -0.5)
-	kernel.SetFloatAt(2, 0, 0)
-	kernel.SetFloatAt(2, 1, -0.5)
-	kernel.SetFloatAt(2, 2, 0)
-
-	sharpened := gocv.NewMat()
-	gocv.Filter2D(resized,
-		&sharpened, -1, kernel, image.Point{-1, -1},
-		0, gocv.BorderDefault)
-	resized = sharpened
-	return resized, edges
 }
 
 // imageToANSI converts an image to ANSI art. The function takes the path to
