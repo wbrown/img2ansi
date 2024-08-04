@@ -39,6 +39,30 @@ var (
 		0x67E0E1: "96", // BRIGHT CYAN (darker)
 		0xC0C0C0: "97", // BRIGHT WHITE (light gray)
 	}
+	fgAnsi256 = map[uint32]string{
+		// Standard 16 colors (0-15)
+		0x000000: "38;5;0",  // Black
+		0x800000: "38;5;1",  // Maroon
+		0x008000: "38;5;2",  // Green
+		0x808000: "38;5;3",  // Olive
+		0x000080: "38;5;4",  // Navy
+		0x800080: "38;5;5",  // Purple
+		0x008080: "38;5;6",  // Teal
+		0xC0C0C0: "38;5;7",  // Silver
+		0x808080: "38;5;8",  // Gray
+		0xFF0000: "38;5;9",  // Red
+		0x00FF00: "38;5;10", // Lime
+		0xFFFF00: "38;5;11", // Yellow
+		0x0000FF: "38;5;12", // Blue
+		0xFF00FF: "38;5;13", // Fuchsia
+		0x00FFFF: "38;5;14", // Aqua
+		0xFFFFFF: "38;5;15", // White
+
+		// 216 colors (16-231)
+		// These are generated programmatically
+	}
+	bgAnsi256 = map[uint32]string{}
+
 	bgAnsi        = make(map[uint32]string)
 	ansiOverrides = map[uint32]string{}
 
@@ -69,6 +93,34 @@ var (
 )
 
 func init() {
+	// Generate 216 colors (6x6x6 color cube)
+	colorCode := 16
+	for r := 0; r < 6; r++ {
+		for g := 0; g < 6; g++ {
+			for b := 0; b < 6; b++ {
+				red := uint32(r * 51)
+				green := uint32(g * 51)
+				blue := uint32(b * 51)
+				color := (red << 16) | (green << 8) | blue
+				fgAnsi256[color] = fmt.Sprintf("38;5;%d", colorCode)
+				colorCode++
+			}
+		}
+	}
+
+	// Grayscale colors (232-255)
+	for i := 0; i < 24; i++ {
+		gray := uint32(i*10 + 8)
+		color := (gray << 16) | (gray << 8) | gray
+		fgAnsi256[color] = fmt.Sprintf("38;5;%d", colorCode)
+		colorCode++
+	}
+
+	// Generate background 256 colors
+	for fgColor, fgCode := range fgAnsi256 {
+		bgAnsi256[fgColor] = "4" + fgCode[1:]
+	}
+
 	newAnsi := fgAnsi
 	for overrideColor, code := range ansiOverrides {
 		for origColor, origCode := range fgAnsi {
@@ -89,13 +141,21 @@ func init() {
 			}
 		}
 	}
-	// Build reverse maps
+
+	buildReverseMap()
+}
+
+func buildReverseMap() {
+	newFgAnsiRev := make(map[string]uint32)
 	for c, code := range fgAnsi {
-		fgAnsiRev[code] = c
+		newFgAnsiRev[code] = c
 	}
+	newBgAnsiRev := make(map[string]uint32)
 	for c, code := range bgAnsi {
-		bgAnsiRev[code] = c
+		newBgAnsiRev[code] = c
 	}
+	fgAnsiRev = newFgAnsiRev
+	bgAnsiRev = newBgAnsiRev
 }
 
 // BlockRune represents a 2x2 block of runes with foreground and
@@ -362,6 +422,8 @@ func main() {
 	outputFile := flag.String("output", "", "Path to save the output (if not specified, prints to stdout)")
 	quantization := flag.Int("quantization", 256, "Quantization factor")
 	scaleFactor := flag.Float64("scale", 3.0, "Scale factor for the output image")
+	eightBit := flag.Bool("8bit", false, "Use 8-bit ANSI colors (256 colors)")
+	printTable := flag.Bool("table", false, "Print ANSI color table")
 
 	// Parse flags
 	flag.Parse()
@@ -373,12 +435,22 @@ func main() {
 		return
 	}
 
+	if *printTable {
+		printAnsiTable()
+		return
+	}
+
 	// Update global variables
 	TargetWidth = *targetWidth
 	MaxChars = *maxChars
 	Quantization = *quantization
 	ScaleFactor = *scaleFactor
 	EdgeDistance = uint32(*edgeDistance)
+	if *eightBit {
+		fgAnsi = fgAnsi256
+		bgAnsi = bgAnsi256
+		buildReverseMap()
+	}
 
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide the path to the image as an argument")
@@ -404,5 +476,5 @@ func main() {
 
 	fmt.Printf("Total string length: %d\n", len(ansiArt))
 	fmt.Printf("Compressed string length: %d\n", len(compressedArt))
-	printAnsiTable()
+	//printAnsiTable()
 }

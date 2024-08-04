@@ -84,11 +84,17 @@ func formatANSICode(fg, bg, block string, count int) string {
 // and returns the foreground and background color codes as strings.
 func extractColors(colorCodes string) (fg string, bg string) {
 	colors := strings.Split(colorCodes, ";")
-	for _, colorCode := range colors {
-		if colorIsForeground(colorCode) {
-			fg = colorCode
-		} else if colorIsBackground(colorCode) {
-			bg = colorCode
+	for i := 0; i < len(colors); i++ {
+		if colors[i] == "38" && i+2 < len(colors) && colors[i+1] == "5" {
+			fg = fmt.Sprintf("38;5;%s", colors[i+2])
+			i += 2
+		} else if colors[i] == "48" && i+2 < len(colors) && colors[i+1] == "5" {
+			bg = fmt.Sprintf("48;5;%s", colors[i+2])
+			i += 2
+		} else if colorIsForeground(colors[i]) {
+			fg = colors[i]
+		} else if colorIsBackground(colors[i]) {
+			bg = colors[i]
 		}
 	}
 	return fg, bg
@@ -100,7 +106,8 @@ func extractColors(colorCodes string) (fg string, bg string) {
 // false if it is a background color.
 func colorIsForeground(color string) bool {
 	return strings.HasPrefix(color, "3") ||
-		strings.HasPrefix(color, "9")
+		strings.HasPrefix(color, "9") ||
+		color == "38"
 }
 
 // colorIsBackground returns true if the ANSI color code corresponds to a
@@ -109,7 +116,8 @@ func colorIsForeground(color string) bool {
 // false if it is a foreground color.
 func colorIsBackground(color string) bool {
 	return strings.HasPrefix(color, "4") ||
-		strings.HasPrefix(color, "10")
+		strings.HasPrefix(color, "10") ||
+		color == "48"
 }
 
 // renderToAnsi renders a 2D array of BlockRune structs to an ANSI string.
