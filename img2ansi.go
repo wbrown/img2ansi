@@ -327,11 +327,11 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 			})
 		}
 		// Add the result to the lookup table
-		lookupTable[paletteBlock] = lookupEntry{
-			rune: bestRune,
-			fg:   bestFG,
-			bg:   bestBG,
-		}
+		//lookupTable[paletteBlock] = lookupEntry{
+		//	rune: bestRune,
+		//	fg:   bestFG,
+		//	bg:   bestBG,
+		//}
 		return bestRune, bestFG, bestBG
 	}
 
@@ -387,11 +387,11 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 	}
 
 	// Add the result to the lookup table
-	lookupTable[paletteBlock] = lookupEntry{
-		rune: bestRune,
-		fg:   bestFG,
-		bg:   bestBG,
-	}
+	//lookupTable[paletteBlock] = lookupEntry{
+	//	rune: bestRune,
+	//	fg:   bestFG,
+	//	bg:   bestBG,
+	//}
 
 	return bestRune, bestFG, bestBG
 }
@@ -567,7 +567,7 @@ func main() {
 	maxChars := flag.Int("maxchars", 1048576, "Maximum number of characters in the output")
 	outputFile := flag.String("output", "", "Path to save the output (if not specified, prints to stdout)")
 	quantization := flag.Int("quantization", 256, "Quantization factor")
-	scaleFactor := flag.Float64("scale", 3.0, "Scale factor for the output image")
+	scaleFactor := flag.Float64("scale", 2.0, "Scale factor for the output image")
 	eightBit := flag.Bool("8bit", false, "Use 8-bit ANSI colors (256 colors)")
 	printTable := flag.Bool("table", false, "Print ANSI color table")
 	kdSearchDepth := flag.Int("kdsearch", 40, "Number of nearest neighbors to search in KD-tree, 0 to disable")
