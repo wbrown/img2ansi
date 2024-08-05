@@ -82,13 +82,24 @@ func saveToPNG(img gocv.Mat, filename string) error {
 // prepareForANSI prepares an image for conversion to ANSI art. The function
 // takes an input image, the target width and height for the output image, and
 // returns the resized image and the edges detected in the image.
-func prepareForANSI(img gocv.Mat, width, height int) (resized, edges gocv.Mat) {
+//
+// It uses area interpolation for downscaling to an intermediate size, detects
+// edges on the intermediate image, and resizes both the intermediate image
+// and the edges to the final size. It also applies a very mild sharpening to
+// the resized image.
+func prepareForANSI(
+	img gocv.Mat,
+	width,
+	height int,
+) (
+	resized, edges gocv.Mat,
+) {
 	intermediate := gocv.NewMat()
 	resized = gocv.NewMat()
 	edges = gocv.NewMat()
 
 	// Use area interpolation for downscaling to an intermediate size
-	intermediateWidth := width * 4 // or another multiplier that gives results
+	intermediateWidth := width * 4
 	intermediateHeight := height * 4
 	gocv.Resize(img,
 		&intermediate,
