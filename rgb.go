@@ -74,9 +74,52 @@ func (r RGB) subtract(other RGB) RGB {
 // in the RGB color space. The function returns the distance as a floating-
 // point number.
 func (r RGB) colorDistance(other RGB) float64 {
-	return math.Sqrt(float64(
-		(int(r.r)-int(other.r))*(int(r.r)-int(other.r)) +
-			(int(r.g)-int(other.g))*(int(r.g)-int(other.g)) +
-			(int(r.b)-int(other.b))*(int(r.b)-int(other.b)),
-	))
+	dr := int(r.r) - int(other.r)
+	dg := int(r.g) - int(other.g)
+	db := int(r.b) - int(other.b)
+	return math.Sqrt(float64(dr*dr + dg*dg + db*db))
+}
+
+const epsilon = 0.000001 // For floating-point comparisons
+
+type colorWithDistance struct {
+	color    RGB
+	distance float64
+	index    int // To ensure stable sorting
+}
+
+type colorDistanceSlice []colorWithDistance
+
+func (s colorDistanceSlice) Len() int      { return len(s) }
+func (s colorDistanceSlice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+func (s colorDistanceSlice) Less(i, j int) bool {
+	if math.Abs(s[i].distance-s[j].distance) < epsilon {
+		// If distances are equal, use color components for tie-breaking
+		if s[i].color.r != s[j].color.r {
+			return s[i].color.r < s[j].color.r
+		}
+		if s[i].color.g != s[j].color.g {
+			return s[i].color.g < s[j].color.g
+		}
+		if s[i].color.b != s[j].color.b {
+			return s[i].color.b < s[j].color.b
+		}
+		// If colors are identical, use the index for stable sorting
+		return s[i].index < s[j].index
+	}
+	return s[i].distance < s[j].distance
+}
+
+type sortableRGB []RGB
+
+func (s sortableRGB) Len() int      { return len(s) }
+func (s sortableRGB) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+func (s sortableRGB) Less(i, j int) bool {
+	if s[i].r != s[j].r {
+		return s[i].r < s[j].r
+	}
+	if s[i].g != s[j].g {
+		return s[i].g < s[j].g
+	}
+	return s[i].b < s[j].b
 }

@@ -127,8 +127,8 @@ func renderToAnsi(blocks [][]BlockRune) string {
 
 	for _, row := range blocks {
 		for _, block := range row {
-			fgCode := fgAnsi[block.FG.toUint32()]
-			bgCode := bgAnsi[block.BG.toUint32()]
+			fgCode, _ := fgAnsi.Get(block.FG.toUint32())
+			bgCode, _ := bgAnsi.Get(block.BG.toUint32())
 
 			sb.WriteString(fmt.Sprintf("\x1b[%s;%sm", fgCode, bgCode))
 			sb.WriteRune(block.Rune)

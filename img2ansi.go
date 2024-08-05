@@ -7,6 +7,7 @@ import (
 	_ "image/png"
 	"math"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -20,51 +21,31 @@ var (
 	EdgeDistance = uint32(1250)
 	MaxChars     = 1048576
 	Quantization = 1
-	fgAnsi       = map[uint32]string{
-		//	// Original colors (more likely to be selected)
-		0x000000: "30", // BLACK
-		0xEB5156: "31", // RED
-		0x69953D: "32", // GREEN
-		0xA28B2F: "33", // YELLOW
-		0x5291CF: "34", // BLUE
-		0x9F73BA: "35", // MAGENTA
-		0x48A0A2: "36", // CYAN
-		0x808080: "37", // WHITE
-		// Additional colors (less likely to be selected)
-		0x4D4D4D: "90", // BRIGHT BLACK (dark gray)
-		0xEF5357: "91", // BRIGHT RED (darker)
-		0x70C13E: "92", // BRIGHT GREEN (darker)
-		0xE3C23C: "93", // BRIGHT YELLOW (darker)
-		0x54AFF9: "94", // BRIGHT BLUE (darker)
-		0xDF84E7: "95", // BRIGHT MAGENTA (darker)
-		0x67E0E1: "96", // BRIGHT CYAN (darker)
-		0xC0C0C0: "97", // BRIGHT WHITE (light gray)
+	kdSearch     = 40
+	fgAnsiData   = []struct {
+		key   uint32
+		value string
+	}{
+		{0x000000, "30"}, {0xEB5156, "31"}, {0x69953D, "32"}, {0xA28B2F, "33"},
+		{0x5291CF, "34"}, {0x9F73BA, "35"}, {0x48A0A2, "36"}, {0x808080, "37"},
+		{0x4D4D4D, "90"}, {0xEF5357, "91"}, {0x70C13E, "92"}, {0xE3C23C, "93"},
+		{0x54AFF9, "94"}, {0xDF84E7, "95"}, {0x67E0E1, "96"}, {0xC0C0C0, "97"},
 	}
-	fgAnsi256 = map[uint32]string{
-		// Standard 16 colors (0-15)
-		0x000000: "38;5;0",  // Black
-		0x800000: "38;5;1",  // Maroon
-		0x008000: "38;5;2",  // Green
-		0x808000: "38;5;3",  // Olive
-		0x000080: "38;5;4",  // Navy
-		0x800080: "38;5;5",  // Purple
-		0x008080: "38;5;6",  // Teal
-		0xC0C0C0: "38;5;7",  // Silver
-		0x808080: "38;5;8",  // Gray
-		0xFF0000: "38;5;9",  // Red
-		0x00FF00: "38;5;10", // Lime
-		0xFFFF00: "38;5;11", // Yellow
-		0x0000FF: "38;5;12", // Blue
-		0xFF00FF: "38;5;13", // Fuchsia
-		0x00FFFF: "38;5;14", // Aqua
-		0xFFFFFF: "38;5;15", // White
-
-		// 216 colors (16-231)
-		// These are generated programmatically
+	fgAnsi        = NewOrderedMap()
+	fgAnsi256Data = []struct {
+		key   uint32
+		value string
+	}{
+		{0x000000, "38;5;0"}, {0x800000, "38;5;1"}, {0x008000, "38;5;2"},
+		{0x808000, "38;5;3"}, {0x000080, "38;5;4"}, {0x800080, "38;5;5"},
+		{0x008080, "38;5;6"}, {0xC0C0C0, "38;5;7"}, {0x808080, "38;5;8"},
+		{0xFF0000, "38;5;9"}, {0x00FF00, "38;5;10"}, {0xFFFF00, "38;5;11"},
+		{0x0000FF, "38;5;12"}, {0xFF00FF, "38;5;13"}, {0x00FFFF, "38;5;14"},
+		{0xFFFFFF, "38;5;15"},
 	}
-	bgAnsi256 = map[uint32]string{}
-
-	bgAnsi        = make(map[uint32]string)
+	fgAnsi256     = NewOrderedMap()
+	bgAnsi        = NewOrderedMap()
+	bgAnsi256     = NewOrderedMap()
 	ansiOverrides = map[uint32]string{}
 
 	blocks = []blockDef{
@@ -99,6 +80,7 @@ var (
 	distanceHits   int
 	distanceMisses int
 	beginInitTime  time.Time
+	kdTree         *ColorNode
 )
 
 type lookupEntry struct {
@@ -118,6 +100,13 @@ func init() {
 	lookupMisses = 0
 	distanceHits = 0
 	distanceMisses = 0
+	for _, data := range fgAnsiData {
+		fgAnsi.Set(data.key, data.value)
+	}
+	for _, data := range fgAnsi256Data {
+		fgAnsi256.Set(data.key, data.value)
+	}
+
 	// Generate 216 colors (6x6x6 color cube)
 	colorCode := 16
 	for r := 0; r < 6; r++ {
@@ -127,7 +116,7 @@ func init() {
 				green := uint32(g * 51)
 				blue := uint32(b * 51)
 				color := (red << 16) | (green << 8) | blue
-				fgAnsi256[color] = fmt.Sprintf("38;5;%d", colorCode)
+				fgAnsi256.Set(color, fmt.Sprintf("38;5;%d", colorCode))
 				colorCode++
 			}
 		}
@@ -137,71 +126,82 @@ func init() {
 	for i := 0; i < 24; i++ {
 		gray := uint32(i*10 + 8)
 		color := (gray << 16) | (gray << 8) | gray
-		fgAnsi256[color] = fmt.Sprintf("38;5;%d", colorCode)
+		fgAnsi256.Set(color, fmt.Sprintf("38;5;%d", colorCode))
 		colorCode++
 	}
 
 	// Generate background 256 colors
-	for fgColor, fgCode := range fgAnsi256 {
-		bgAnsi256[fgColor] = "4" + fgCode[1:]
+	fgAnsi256.Iterate(func(key, value interface{}) {
+		fgColor := key.(uint32)
+		fgCode := value.(string)
+		bgAnsi256.Set(fgColor, "4"+fgCode[1:])
+	})
+
+	for overrideColor, code := range ansiOverrides {
+		fgAnsi.Iterate(func(key, value interface{}) {
+			fgColor := key.(uint32)
+			fgCode := value.(string)
+			if fgCode == code {
+				fgAnsi.Delete(fgColor)
+				fgAnsi.Set(overrideColor, code)
+			}
+		})
 	}
 
-	newAnsi := fgAnsi
-	for overrideColor, code := range ansiOverrides {
-		for origColor, origCode := range fgAnsi {
-			if origCode == code {
-				delete(newAnsi, origColor)
-				newAnsi[overrideColor] = code
-			}
-		}
-	}
-	fgAnsi = newAnsi
 	// If bgaAnsi is empty, populate it
-	if len(bgAnsi) == 0 {
-		for fgColor, code := range fgAnsi {
-			if code[0] == '3' {
-				bgAnsi[fgColor] = "4" + code[1:]
-			} else if code[0] == '9' {
-				bgAnsi[fgColor] = "10" + code[1:]
+	if bgAnsi.Len() == 0 {
+		fgAnsi.Iterate(func(key, value interface{}) {
+			fgColor := key.(uint32)
+			fgCode := value.(string)
+			if fgCode[0] == '3' {
+				bgAnsi.Set(fgColor, "4"+fgCode[1:])
+			} else if fgCode[0] == '9' {
+				bgAnsi.Set(fgColor, "10"+fgCode[1:])
 			}
-		}
+		})
 	}
 
 	buildReverseMap()
+	computeColorDistances()
 	lookupTable = make(map[[4]RGB]lookupEntry)
 }
 
 func buildReverseMap() {
 	newFgAnsiRev := make(map[string]uint32)
-	for c, code := range fgAnsi {
-		newFgAnsiRev[code] = c
-	}
+	fgAnsi.Iterate(func(key, value interface{}) {
+		fgColor := key.(uint32)
+		fgCode := value.(string)
+		newFgAnsiRev[fgCode] = fgColor
+	})
+
 	newBgAnsiRev := make(map[string]uint32)
-	for c, code := range bgAnsi {
-		newBgAnsiRev[code] = c
-	}
+	bgAnsi.Iterate(func(key, value interface{}) {
+		bgColor := key.(uint32)
+		bgCode := value.(string)
+		newBgAnsiRev[bgCode] = bgColor
+	})
 	fgAnsiRev = newFgAnsiRev
 	bgAnsiRev = newBgAnsiRev
-	computeColorDistances()
 }
 
 func computeColorDistances() {
-	colors = make([]RGB, 0, len(fgAnsi))
+	colors = make([]RGB, 0, fgAnsi.Len())
 	idx := uint32(0)
-	for c := range fgAnsi {
-		colors = append(colors, rgbFromUint32(c))
-		rgbColorTable[rgbFromUint32(c)] = idx
+	fgAnsi.Iterate(func(key, value interface{}) {
+		colors = append(colors, rgbFromUint32(key.(uint32)))
+		rgbColorTable[rgbFromUint32(key.(uint32))] = idx
 		idx++
-	}
+	})
+
+	maxDepth := int(math.Log2(float64(len(colors)))) + 1
+	kdTree = buildKDTree(colors, 0, maxDepth)
 	for r := 0; r < 256; r++ {
 		for g := 0; g < 256; g++ {
 			for b := 0; b < 256; b++ {
 				rgb := RGB{uint8(r), uint8(g), uint8(b)}
-				for _, c := range colors {
-					if c.colorDistance(rgb) < closestColor[rgb.toUint32()].colorDistance(rgb) {
-						closestColor[rgb.toUint32()] = c
-					}
-				}
+				closest, _ := nearestNeighbor(
+					kdTree, rgb, kdTree.Color, math.MaxFloat64, 0)
+				closestColor[r<<16|g<<8|b] = closest
 			}
 		}
 	}
@@ -305,15 +305,72 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 	}
 	lookupMisses++
 
+	if fgAnsi.Len() < 32 || kdSearch == 0 {
+		var bestRune rune
+		var bestFG, bestBG RGB
+		minError := math.MaxFloat64
+		for _, b := range blocks {
+			fgAnsi.Iterate(func(fg, _ interface{}) {
+				fgRgb := rgbFromUint32(fg.(uint32))
+				bgAnsi.Iterate(func(bg, _ interface{}) {
+					bgRgb := rgbFromUint32(bg.(uint32))
+					if fg != bg {
+						colorError := calculateBlockError(block, b.Quad, fgRgb, bgRgb, isEdge)
+						if colorError < minError {
+							minError = colorError
+							bestRune = b.Rune
+							bestFG = fgRgb
+							bestBG = bgRgb
+						}
+					}
+				})
+			})
+		}
+		return bestRune, bestFG, bestBG
+	}
+
+	// Find initial candidates using KD-tree and sort by distance
+	var candidateColors colorDistanceSlice
+	seenColors := make(map[RGB]bool)
+
+	// Process block colors in a consistent order
+	sortedBlockColors := make(sortableRGB, len(block))
+	for i, c := range block {
+		sortedBlockColors[i] = c
+	}
+	sort.Sort(sortedBlockColors)
+
+	searchDepth := min(kdSearch, len(colors))
+
+	for _, color := range sortedBlockColors {
+		nearest := kNearestNeighbors(kdTree, color, searchDepth)
+		for _, c := range nearest {
+			if _, seen := seenColors[c]; !seen {
+				distance := color.colorDistance(c)
+				candidateColors = append(candidateColors, colorWithDistance{c, distance, len(candidateColors)})
+				seenColors[c] = true
+			}
+		}
+	}
+
+	sort.Sort(candidateColors)
+
 	var bestRune rune
 	var bestFG, bestBG RGB
 	minError := math.MaxFloat64
 
 	for _, b := range blocks {
-		for _, fg := range colors {
-			for _, bg := range colors {
+		for i, fgWithDist := range candidateColors {
+			for j, bgWithDist := range candidateColors {
+				if i == j { // Skip when fg and bg are the same
+					continue
+				}
+				fg, bg := fgWithDist.color, bgWithDist.color
 				colorError := calculateBlockError(block, b.Quad, fg, bg, isEdge)
-				if colorError < minError {
+				// Round error to reduce floating-point variability
+				if colorError < minError || (math.Abs(colorError-minError) < epsilon &&
+					(fg.r < bestFG.r || (fg.r == bestFG.r && fg.g < bestFG.g) ||
+						(fg.r == bestFG.r && fg.g == bestFG.g && fg.b < bestFG.b))) {
 					minError = colorError
 					bestRune = b.Rune
 					bestFG = fg
@@ -469,25 +526,29 @@ func imageToANSI(imagePath string) string {
 // to stdout.
 func printAnsiTable() {
 	// Header
-	fgColors := make([]uint32, 0, len(fgAnsi))
-	for fgColor := range fgAnsi {
-		fgColors = append(fgColors, fgColor)
-	}
-	bgColors := make([]uint32, 0, len(bgAnsi))
-	for bgColor := range bgAnsi {
-		bgColors = append(bgColors, bgColor)
-	}
+	fgColors := make([]uint32, 0, fgAnsi.Len())
+	fgAnsi.Iterate(func(key, value interface{}) {
+		fgColors = append(fgColors, key.(uint32))
+	})
+	bgColors := make([]uint32, 0, bgAnsi.Len())
+	bgAnsi.Iterate(func(key, value interface{}) {
+		bgColors = append(bgColors, key.(uint32))
+	})
 	fmt.Printf("%17s", " ")
 	for _, fg := range fgColors {
-		fmt.Printf(" %6x (%3s) ", fg, fgAnsi[fg])
+		fgAns, _ := fgAnsi.Get(fg)
+		fmt.Printf(" %6x (%3s) ", fg, fgAns)
 	}
 	fmt.Println()
 	for _, bg := range bgColors {
-		fmt.Printf("   %6x (%3s) ", bg, bgAnsi[bg])
+		bgAns, _ := bgAnsi.Get(bg)
+		fmt.Printf("   %6x (%3s) ", bg, bgAns)
 
 		for _, fg := range fgColors {
+			fgAns, _ := fgAnsi.Get(fg)
+			bgAns, _ := bgAnsi.Get(bg)
 			fmt.Printf("    %s[%s;%sm %3s %3s %s[0m ",
-				ESC, fgAnsi[fg], bgAnsi[bg], fgAnsi[fg], bgAnsi[bg], ESC)
+				ESC, fgAns, bgAns, fgAns, bgAns, ESC)
 		}
 		fmt.Println()
 	}
@@ -497,12 +558,12 @@ func main() {
 	inputFile := flag.String("input", "", "Path to the input image file (required)")
 	targetWidth := flag.Int("width", 100, "Target width of the output image")
 	maxChars := flag.Int("maxchars", 1048576, "Maximum number of characters in the output")
-	edgeDistance := flag.Uint("edge", 1250, "Edge distance")
 	outputFile := flag.String("output", "", "Path to save the output (if not specified, prints to stdout)")
 	quantization := flag.Int("quantization", 256, "Quantization factor")
 	scaleFactor := flag.Float64("scale", 3.0, "Scale factor for the output image")
 	eightBit := flag.Bool("8bit", false, "Use 8-bit ANSI colors (256 colors)")
 	printTable := flag.Bool("table", false, "Print ANSI color table")
+	kdSearchDepth := flag.Int("kdsearch", 40, "Number of nearest neighbors to search in KD-tree, 0 to disable")
 
 	// Parse flags
 	flag.Parse()
@@ -524,16 +585,16 @@ func main() {
 	MaxChars = *maxChars
 	Quantization = *quantization
 	ScaleFactor = *scaleFactor
-	EdgeDistance = uint32(*edgeDistance)
+	kdSearch = *kdSearchDepth
 	if *eightBit {
 		fgAnsi = fgAnsi256
 		bgAnsi = bgAnsi256
 		buildReverseMap()
 		computeColorDistances()
 	}
-	print(len(colorDistances), " colorDistances\n")
 	endInit := time.Now()
 	fmt.Printf("Initialization time: %v\n", endInit.Sub(beginInitTime))
+	fmt.Printf("%d colors in palette\n", len(colors))
 
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide the path to the image as an argument")
@@ -559,7 +620,7 @@ func main() {
 
 	fmt.Printf("Total string length: %d\n", len(ansiArt))
 	fmt.Printf("Compressed string length: %d\n", len(compressedArt))
-	fmt.Printf("Cache: %d hits, %d misses\n", lookupHits, lookupMisses)
-	fmt.Printf("Distance: %d hits, %d misses\n", distanceHits, distanceMisses)
+	fmt.Printf("Cache: %d hits, %d misses, %d entries\n", lookupHits, lookupMisses, len(lookupTable))
+	fmt.Printf("Distance: %d hits, %d misses, %d entries\n", distanceHits, distanceMisses, len(colorDistances))
 	//printAnsiTable()
 }
