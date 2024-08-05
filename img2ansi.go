@@ -326,6 +326,12 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 				})
 			})
 		}
+		// Add the result to the lookup table
+		lookupTable[paletteBlock] = lookupEntry{
+			rune: bestRune,
+			fg:   bestFG,
+			bg:   bestBG,
+		}
 		return bestRune, bestFG, bestBG
 	}
 
@@ -521,7 +527,6 @@ func imageToANSI(imagePath string) string {
 		}
 	}
 }
-
 
 // printAnsiTable prints a table of ANSI colors and their corresponding
 // codes for both foreground and background colors. The table is printed
