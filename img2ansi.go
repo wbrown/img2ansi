@@ -506,6 +506,7 @@ func imageToANSI(imagePath string) string {
 		// Write the edges image to a file for debugging
 		if err := saveToPNG(edges, "edges.png"); err != nil {
 			fmt.Println(err)
+
 		}
 
 		ansiImage := renderToAnsi(ditheredImg)
@@ -520,6 +521,7 @@ func imageToANSI(imagePath string) string {
 		}
 	}
 }
+
 
 // printAnsiTable prints a table of ANSI colors and their corresponding
 // codes for both foreground and background colors. The table is printed
@@ -570,7 +572,7 @@ func main() {
 
 	// Validate required flags
 	if *inputFile == "" {
-		fmt.Println("Please provide the path to the input image using the -input flag")
+		fmt.Println("Please provide the image using the -input flag")
 		flag.PrintDefaults()
 		return
 	}
