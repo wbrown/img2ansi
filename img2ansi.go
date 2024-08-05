@@ -7,6 +7,7 @@ import (
 	_ "image/png"
 	"math"
 	"os"
+	"time"
 )
 
 const (
@@ -66,10 +67,7 @@ var (
 	bgAnsi        = make(map[uint32]string)
 	ansiOverrides = map[uint32]string{}
 
-	blocks = []struct {
-		Rune rune
-		Quad Quadrants
-	}{
+	blocks = []blockDef{
 		{' ', Quadrants{false, false, false, false}}, // Empty space
 		{'▘', Quadrants{true, false, false, false}},  // Quadrant upper left
 		{'▝', Quadrants{false, true, false, false}},  // Quadrant upper right
@@ -90,9 +88,36 @@ var (
 
 	fgAnsiRev = map[string]uint32{}
 	bgAnsiRev = map[string]uint32{}
+
+	closestColor   = make([]RGB, 256*256*256)
+	colors         = make([]RGB, 0)
+	rgbColorTable  = make(map[RGB]uint32)
+	colorDistances = make(map[RGB]map[RGB]float64)
+	lookupTable    map[[4]RGB]lookupEntry
+	lookupHits     int
+	lookupMisses   int
+	distanceHits   int
+	distanceMisses int
+	beginInitTime  time.Time
 )
 
+type lookupEntry struct {
+	rune rune
+	fg   RGB
+	bg   RGB
+}
+
+type blockDef struct {
+	Rune rune
+	Quad Quadrants
+}
+
 func init() {
+	beginInitTime = time.Now()
+	lookupHits = 0
+	lookupMisses = 0
+	distanceHits = 0
+	distanceMisses = 0
 	// Generate 216 colors (6x6x6 color cube)
 	colorCode := 16
 	for r := 0; r < 6; r++ {
@@ -143,6 +168,7 @@ func init() {
 	}
 
 	buildReverseMap()
+	lookupTable = make(map[[4]RGB]lookupEntry)
 }
 
 func buildReverseMap() {
@@ -156,6 +182,29 @@ func buildReverseMap() {
 	}
 	fgAnsiRev = newFgAnsiRev
 	bgAnsiRev = newBgAnsiRev
+	computeColorDistances()
+}
+
+func computeColorDistances() {
+	colors = make([]RGB, 0, len(fgAnsi))
+	idx := uint32(0)
+	for c := range fgAnsi {
+		colors = append(colors, rgbFromUint32(c))
+		rgbColorTable[rgbFromUint32(c)] = idx
+		idx++
+	}
+	for r := 0; r < 256; r++ {
+		for g := 0; g < 256; g++ {
+			for b := 0; b < 256; b++ {
+				rgb := RGB{uint8(r), uint8(g), uint8(b)}
+				for _, c := range colors {
+					if c.colorDistance(rgb) < closestColor[rgb.toUint32()].colorDistance(rgb) {
+						closestColor[rgb.toUint32()] = c
+					}
+				}
+			}
+		}
+	}
 }
 
 // BlockRune represents a 2x2 block of runes with foreground and
@@ -243,27 +292,42 @@ func modifiedAtkinsonDitherForBlocks(img gocv.Mat, edges gocv.Mat) [][]BlockRune
 // representation, the foreground color, and the background color for the
 // block.
 func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
+	// Map each color in the block to its closest palette color
+	var paletteBlock [4]RGB
+	for i, color := range block {
+		paletteBlock[i] = closestColor[color.toUint32()]
+	}
+
+	// Check if the palette-mapped block is in the lookup table
+	if entry, exists := lookupTable[paletteBlock]; exists {
+		lookupHits++
+		return entry.rune, entry.fg, entry.bg
+	}
+	lookupMisses++
+
 	var bestRune rune
 	var bestFG, bestBG RGB
 	minError := math.MaxFloat64
 
 	for _, b := range blocks {
-		for fg := range fgAnsi {
-			fgRgb := rgbFromUint32(fg)
-			for bg := range bgAnsi {
-				bgRgb := rgbFromUint32(bg)
-				if fg == bg {
-					continue
-				}
-				colorError := calculateBlockError(block, b.Quad, fgRgb, bgRgb, isEdge)
+		for _, fg := range colors {
+			for _, bg := range colors {
+				colorError := calculateBlockError(block, b.Quad, fg, bg, isEdge)
 				if colorError < minError {
 					minError = colorError
 					bestRune = b.Rune
-					bestFG = fgRgb
-					bestBG = bgRgb
+					bestFG = fg
+					bestBG = bg
 				}
 			}
 		}
+	}
+
+	// Add the result to the lookup table
+	lookupTable[paletteBlock] = lookupEntry{
+		rune: bestRune,
+		fg:   bestFG,
+		bg:   bestBG,
 	}
 
 	return bestRune, bestFG, bestBG
@@ -275,23 +339,38 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 // background colors, and a boolean value indicating whether the block is
 // an edge block. It returns the error as a floating-point number.
 func calculateBlockError(block [4]RGB, quad Quadrants, fg, bg RGB, isEdge bool) float64 {
-	var colorError float64
+	var totalError float64
 	quadrants := [4]bool{quad.TopLeft, quad.TopRight, quad.BottomLeft, quad.BottomRight}
-
-	for i, blockColor := range block {
-		var target RGB
+	for i, color := range block {
+		var targetColor RGB
 		if quadrants[i] {
-			target = fg
+			targetColor = fg
 		} else {
-			target = bg
+			targetColor = bg
 		}
-		colorError += blockColor.colorDistance(target)
+		l, lOk := colorDistances[color]
+		if !lOk {
+			distanceMisses++
+			colorDistances[color] = make(map[RGB]float64)
+			l = colorDistances[color]
+		}
+		r, rOk := l[targetColor]
+		if !rOk {
+			r = color.colorDistance(targetColor)
+			colorDistances[color][targetColor] = r
+		}
+		if lOk && rOk {
+			distanceHits++
+		} else {
+			distanceMisses++
+		}
+		totalError += r
+	}
+	if isEdge {
+		totalError *= 0.5
 	}
 
-	if isEdge {
-		colorError *= 0.5 // Reduce colorError for edge blocks to preserve edges
-	}
-	return colorError
+	return totalError
 }
 
 // getQuadrantsForRune returns the quadrants for a given rune character.
@@ -450,7 +529,11 @@ func main() {
 		fgAnsi = fgAnsi256
 		bgAnsi = bgAnsi256
 		buildReverseMap()
+		computeColorDistances()
 	}
+	print(len(colorDistances), " colorDistances\n")
+	endInit := time.Now()
+	fmt.Printf("Initialization time: %v\n", endInit.Sub(beginInitTime))
 
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide the path to the image as an argument")
@@ -476,5 +559,7 @@ func main() {
 
 	fmt.Printf("Total string length: %d\n", len(ansiArt))
 	fmt.Printf("Compressed string length: %d\n", len(compressedArt))
+	fmt.Printf("Cache: %d hits, %d misses\n", lookupHits, lookupMisses)
+	fmt.Printf("Distance: %d hits, %d misses\n", distanceHits, distanceMisses)
 	//printAnsiTable()
 }
