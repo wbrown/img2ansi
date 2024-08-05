@@ -7,7 +7,7 @@ import (
 
 // compressANSI compresses an ANSI image by combining adjacent blocks with
 // the same foreground and background colors. The function takes an ANSI
-// image as a string and returns the compressed ANSI image as a string.
+// image as a string and returns the more efficient ANSI image as a string.
 func compressANSI(ansiImage string) string {
 	var compressed strings.Builder
 	var currentFg, currentBg, currentBlock string
@@ -34,10 +34,13 @@ func compressANSI(ansiImage string) string {
 				fg = ""
 			}
 
+			// If any color or block changes, write the current block
+			// and start a new one
 			if fg != currentFg || bg != currentBg || block != currentBlock {
 				if count > 0 {
 					compressed.WriteString(
-						formatANSICode(currentFg, currentBg, currentBlock, count))
+						formatANSICode(
+							currentFg, currentBg, currentBlock, count))
 				}
 				currentFg, currentBg, currentBlock = fg, bg, block
 				count = 1
@@ -45,6 +48,7 @@ func compressANSI(ansiImage string) string {
 				count++
 			}
 		}
+		// Write the last block of the line
 		if count > 0 {
 			compressed.WriteString(
 				formatANSICode(currentFg, currentBg, currentBlock, count))
