@@ -1,4 +1,4 @@
-package main
+package img2ansi
 
 import (
 	"sync"
@@ -19,7 +19,7 @@ func NewOrderedMap() *OrderedMap {
 	}
 }
 
-// Set adds a key-value pair to the map
+// Set adds a Key-Value pair to the map
 func (om *OrderedMap) Set(key, value interface{}) {
 	om.mu.Lock()
 	defer om.mu.Unlock()
@@ -30,7 +30,7 @@ func (om *OrderedMap) Set(key, value interface{}) {
 	om.values[key] = value
 }
 
-// Get retrieves a value from the map by key
+// Get retrieves a Value from the map by Key
 func (om *OrderedMap) Get(key interface{}) (interface{}, bool) {
 	om.mu.RLock()
 	defer om.mu.RUnlock()
@@ -39,7 +39,7 @@ func (om *OrderedMap) Get(key interface{}) (interface{}, bool) {
 	return val, exists
 }
 
-// Delete removes a key-value pair from the map
+// Delete removes a Key-Value pair from the map
 func (om *OrderedMap) Delete(key interface{}) {
 	om.mu.Lock()
 	defer om.mu.Unlock()
@@ -63,7 +63,7 @@ func (om *OrderedMap) Keys() []interface{} {
 	return append([]interface{}{}, om.keys...)
 }
 
-// Iterate calls the provided function for each key-value pair in order
+// Iterate calls the provided function for each Key-Value pair in order
 func (om *OrderedMap) Iterate(f func(key, value interface{})) {
 	om.mu.RLock()
 	defer om.mu.RUnlock()

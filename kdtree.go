@@ -1,8 +1,7 @@
-package main
+package img2ansi
 
 import (
 	"container/heap"
-	"math"
 	"sort"
 )
 
@@ -15,24 +14,65 @@ type ColorNode struct {
 	SplitAxis   int
 }
 
-// buildKDTree constructs a KD-tree from a list of RGB colors. The function
-// takes a list of colors, the current depth, and the maximum depth of the
-// tree as arguments, and returns the root node of the KD-tree.
+// buildKDTree constructs a KD-tree from a list of RGB colors, optimized for
+// ANSI color matching. This implementation is particularly effective for
+// ANSI art because:
+//
+//   - It preserves subtle shade differences crucial in limited color palettes
+//     like ANSI.
+//   - It maintains determinism, ensuring consistent output across runs, which
+//     is important for reproducible ANSI art generation.
+//   - It balances the tree effectively without over-optimizing, which works
+//     well with the relatively small ANSI color space.
+//   - It handles the discrete nature of ANSI colors well by carefully
+//     managing axis splitting and duplicate color values.
+//
+// The function takes a list of colors, the current depth, and the maximum
+// depth of the tree as arguments, and returns the root node of the KD-tree.
+// The resulting tree structure allows for efficient nearest-neighbor
+// searches in the ANSI color space, crucial for mapping arbitrary RGB colors
+// to the closest ANSI representation.
 func buildKDTree(colors []RGB, depth int, maxDepth int) *ColorNode {
+	// Base case: stop recursion if we've reached max depth or have no colors
 	if len(colors) == 0 || depth >= maxDepth {
 		return nil
 	}
 
-	// Choose splitting axis based on the dimension with the largest variance
+	// Choose splitting axis based on the dimension with the largest range
+	// This preserves the actual distribution of colors in the dataset,
+	// helping to maintain subtle shade differences
 	axis := chooseSplitAxis(colors)
 
-	// Sort colors along the chosen axis
+	// Sort colors deterministically. This ensures consistency between
+	// runs while minimally altering the tree structure
 	sort.Slice(colors, func(i, j int) bool {
-		return getColorComponent(colors[i], axis) <
-			getColorComponent(colors[j], axis)
+		iComp := getColorComponent(colors[i], axis)
+		jComp := getColorComponent(colors[j], axis)
+		if iComp != jComp {
+			return iComp < jComp
+		}
+		// Tie-breakers: ensure full determinism even with equal axis values
+		if colors[i].R != colors[j].R {
+			return colors[i].R < colors[j].R
+		}
+		if colors[i].G != colors[j].G {
+			return colors[i].G < colors[j].G
+		}
+		return colors[i].B < colors[j].B
 	})
 
 	median := len(colors) / 2
+
+	// Handle duplicate values at the median
+	// This prevents arbitrary splitting of identical colors, which could
+	// cause inconsistencies
+	for median < len(colors)-1 && getColorComponent(colors[median], axis) ==
+		getColorComponent(colors[median+1], axis) {
+		median++
+	}
+
+	// Create and return the node, recursively building left and right subtrees
+	// Using the median as split point generally creates a balanced tree
 	return &ColorNode{
 		Color:     colors[median],
 		Left:      buildKDTree(colors[:median], depth+1, maxDepth),
@@ -41,31 +81,33 @@ func buildKDTree(colors []RGB, depth int, maxDepth int) *ColorNode {
 	}
 }
 
-// chooseSplitAxis selects the axis along which to split the colors in a
-// KD-tree. The function takes a list of RGB colors as input and returns
-// the index of the axis with the largest variance.
+// chooseSplitAxis selects the axis with the largest color range
+// This helps to preserve the color variations in the dataset
 func chooseSplitAxis(colors []RGB) int {
-	var varR, varG, varB float64
-	var meanR, meanG, meanB float64
+	minR, maxR := colors[0].R, colors[0].R
+	minG, maxG := colors[0].G, colors[0].G
+	minB, maxB := colors[0].B, colors[0].B
 
+	// Find the min and max values for each color component
 	for _, c := range colors {
-		meanR += float64(c.r)
-		meanG += float64(c.g)
-		meanB += float64(c.b)
-	}
-	meanR /= float64(len(colors))
-	meanG /= float64(len(colors))
-	meanB /= float64(len(colors))
-
-	for _, c := range colors {
-		varR += math.Pow(float64(c.r)-meanR, 2)
-		varG += math.Pow(float64(c.g)-meanG, 2)
-		varB += math.Pow(float64(c.b)-meanB, 2)
+		minR = min(minR, c.R)
+		maxR = max(maxR, c.R)
+		minG = min(minG, c.G)
+		maxG = max(maxG, c.G)
+		minB = min(minB, c.B)
+		maxB = max(maxB, c.B)
 	}
 
-	if varR > varG && varR > varB {
+	// Calculate the range for each color component
+	rangeR := maxR - minR
+	rangeG := maxG - minG
+	rangeB := maxB - minB
+
+	// Return the axis with the largest range
+	// This ensures we split along the axis with the most color variation
+	if rangeR >= rangeG && rangeR >= rangeB {
 		return 0 // R axis
-	} else if varG > varB {
+	} else if rangeG >= rangeB {
 		return 1 // G axis
 	}
 	return 2 // B axis
@@ -77,11 +119,11 @@ func chooseSplitAxis(colors []RGB) int {
 func getColorComponent(color RGB, axis int) uint8 {
 	switch axis {
 	case 0:
-		return color.r
+		return color.R
 	case 1:
-		return color.g
+		return color.G
 	default:
-		return color.b
+		return color.B
 	}
 }
 
@@ -142,19 +184,19 @@ func (node *ColorNode) nearestNeighbor(
 	var next, other *ColorNode
 	switch axis {
 	case 0:
-		if target.r < node.Color.r {
+		if target.R < node.Color.R {
 			next, other = node.Left, node.Right
 		} else {
 			next, other = node.Right, node.Left
 		}
 	case 1:
-		if target.g < node.Color.g {
+		if target.G < node.Color.G {
 			next, other = node.Left, node.Right
 		} else {
 			next, other = node.Right, node.Left
 		}
 	default:
-		if target.b < node.Color.b {
+		if target.B < node.Color.B {
 			next, other = node.Left, node.Right
 		} else {
 			next, other = node.Right, node.Left
@@ -167,11 +209,11 @@ func (node *ColorNode) nearestNeighbor(
 	var axisDistance float64
 	switch axis {
 	case 0:
-		axisDistance = float64(target.r - node.Color.r)
+		axisDistance = float64(target.R - node.Color.R)
 	case 1:
-		axisDistance = float64(target.g - node.Color.g)
+		axisDistance = float64(target.G - node.Color.G)
 	default:
-		axisDistance = float64(target.b - node.Color.b)
+		axisDistance = float64(target.B - node.Color.B)
 	}
 	if axisDistance*axisDistance < bestDist {
 		best, bestDist = other.nearestNeighbor(
@@ -193,60 +235,23 @@ type ColorDistance struct {
 // and the number of neighbors to find as input, and returns a slice of colors
 // sorted by distance.
 func (node *ColorNode) kNearestNeighbors(target RGB, k int) []RGB {
-	pq := make(PriorityQueue, 0)
-	heap.Init(&pq)
-
-	var search func(*ColorNode, int)
-	search = func(node *ColorNode, depth int) {
-		if node == nil {
-			return
-		}
-
-		dist := node.Color.colorDistance(target)
-
-		if pq.Len() < k {
-			heap.Push(&pq, ColorDistance{node.Color, dist})
-		} else if dist < pq[0].distance {
-			heap.Pop(&pq)
-			heap.Push(&pq, ColorDistance{node.Color, dist})
-		}
-
-		axis := depth % 3
-		var firstChild, secondChild *ColorNode
-		var axisDist float64
-
-		switch axis {
-		case 0:
-			axisDist = float64(target.r) - float64(node.Color.r)
-			if axisDist < 0 {
-				firstChild, secondChild = node.Left, node.Right
-			} else {
-				firstChild, secondChild = node.Right, node.Left
-			}
-		case 1:
-			axisDist = float64(target.g) - float64(node.Color.g)
-			if axisDist < 0 {
-				firstChild, secondChild = node.Left, node.Right
-			} else {
-				firstChild, secondChild = node.Right, node.Left
-			}
-		case 2:
-			axisDist = float64(target.b) - float64(node.Color.b)
-			if axisDist < 0 {
-				firstChild, secondChild = node.Left, node.Right
-			} else {
-				firstChild, secondChild = node.Right, node.Left
-			}
-		}
-
-		search(firstChild, depth+1)
-
-		if pq.Len() < k || axisDist*axisDist < pq[0].distance {
-			search(secondChild, depth+1)
-		}
+	allColors := node.getAllColors()
+	if len(allColors) <= k {
+		return allColors
 	}
 
-	search(node, 0)
+	pq := make(PriorityQueue, 0, k)
+	heap.Init(&pq)
+
+	for _, color := range allColors {
+		dist := color.colorDistance(target)
+		if pq.Len() < k {
+			heap.Push(&pq, ColorDistance{color, dist})
+		} else if dist < pq[0].distance {
+			heap.Pop(&pq)
+			heap.Push(&pq, ColorDistance{color, dist})
+		}
+	}
 
 	result := make([]RGB, k)
 	for i := k - 1; i >= 0; i-- {
@@ -254,4 +259,44 @@ func (node *ColorNode) kNearestNeighbors(target RGB, k int) []RGB {
 	}
 
 	return result
+}
+
+func (node *ColorNode) getAllColors() []RGB {
+	if node == nil {
+		return nil
+	}
+	colors := []RGB{node.Color}
+	colors = append(colors, node.Left.getAllColors()...)
+	colors = append(colors, node.Right.getAllColors()...)
+	return colors
+}
+
+func (node *ColorNode) Serialize() []byte {
+	if node == nil {
+		return []byte{0} // Null node
+	}
+
+	data := []byte{1} // Non-null node
+	data = append(data, node.Color.R, node.Color.G, node.Color.B)
+	data = append(data, byte(node.SplitAxis))
+	data = append(data, node.Left.Serialize()...)
+	data = append(data, node.Right.Serialize()...)
+
+	return data
+}
+
+func DeserializeKDTree(data []byte) (*ColorNode, []byte) {
+	if len(data) == 0 || data[0] == 0 {
+		return nil, data[1:]
+	}
+
+	node := &ColorNode{
+		Color:     RGB{data[1], data[2], data[3]},
+		SplitAxis: int(data[4]),
+	}
+
+	node.Left, data = DeserializeKDTree(data[5:])
+	node.Right, data = DeserializeKDTree(data)
+
+	return node, data
 }

@@ -1,4 +1,4 @@
-package main
+package img2ansi
 
 // PriorityQueue implements heap.Interface and holds ColorDistance items
 type PriorityQueue []ColorDistance

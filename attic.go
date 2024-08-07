@@ -1,4 +1,4 @@
-package main
+package img2ansi
 
 // Below are measured from the terminal using a color picker
 //ansiOverrides = map[uint32]string{

@@ -1,14 +1,25 @@
-package main
+package img2ansi
 
 import (
 	"fmt"
 	"strings"
 )
 
-// compressANSI compresses an ANSI image by combining adjacent blocks with
+type AnsiEntry struct {
+	Key   uint32
+	Value string
+}
+type AnsiData []AnsiEntry
+
+var (
+	fgAnsi = NewOrderedMap()
+	bgAnsi = NewOrderedMap()
+)
+
+// CompressANSI compresses an ANSI image by combining adjacent blocks with
 // the same foreground and background colors. The function takes an ANSI
 // image as a string and returns the more efficient ANSI image as a string.
-func compressANSI(ansiImage string) string {
+func CompressANSI(ansiImage string) string {
 	var compressed strings.Builder
 	var currentFg, currentBg, currentBlock string
 	var count int
@@ -122,6 +133,16 @@ func colorIsBackground(color string) bool {
 	return strings.HasPrefix(color, "4") ||
 		strings.HasPrefix(color, "10") ||
 		color == "48"
+}
+
+// ToOrderedMap converts an AnsiData slice to an OrderedMap  with the values
+// as keys and the keys as values.
+func (ansiData AnsiData) ToOrderedMap() *OrderedMap {
+	om := NewOrderedMap()
+	for _, entry := range ansiData {
+		om.Set(entry.Key, entry.Value)
+	}
+	return om
 }
 
 // renderToAnsi renders a 2D array of BlockRune structs to an ANSI string.

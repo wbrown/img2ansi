@@ -32,6 +32,9 @@ and text-based display.
 6. **Optimized for Text Output**: Designed to produce ANSI escape code
    sequences, making it ideal for terminal-based image display.
 
+7. **Optimized KD Tree Search**: Optimized for ANSI art generation by
+   precomputing quantized color distances.
+
 ## How It Works
 
 The algorithm processes the input image in 2x2 blocks, determining the best
@@ -60,13 +63,14 @@ uses the 256 color scheme.
 To build the program, run the following commands:
 
 ```sh
-go get -u github.com/wbrown/ansi2img
+go build github.com/wbrown/ansi2img/cmd/ansify
 ```
 
 ## Usage
 `./img2ansi -input <input> [-output <output>] [-width <width>]
 [-scale <scale>] [-quantization <quantization>] [-maxchars <maxchars>]
-[-8bit] [-jb] [-table]`
+[-color_method <color_method>] [-palette <palette>] [-kdsearch <kdsearch>]
+[-cache_threshold <cache_threshold>]`
 
 **Performance**
 
@@ -90,18 +94,28 @@ image. The cache is used to speed up the program by not having to recompute
 the blocks for each 2x2 pixel block in the image. It is a fuzzy cache, so it
 is thresholded on error distance from the target block.
 
+There are built in embedded palettes that have precomputed tables for the
+colors. These are `ansi16`, `ansi256`, and `jetbrains32`. Each precomputed
+palette also has three color spaces that are precomputed: `RGB`, `Lab`, and
+`Redmean`. The default is `Redmean`.
+
 **Colors**
 
 By default the program uses the 16-color ANSI palette, split into 8 foreground
-colors and 8 background colors. The `-8bit` option can be used to enable 256
-color mode. The `-jb` option can be used to use the JetBrains color scheme,
-which allows for separate foreground and background palettes to effectively
-double the number of colors available.
-
-The program performes well without quantization, but if you want to reduce the
+colors and 8 background colors. There are three palettes built in, selectable
+by using the `-palette` option:
+* `ansi16`: The default 16-color ANSI palette
+* `ansi256`: The 256-color ANSI palette
+* `jetbrains32`: The JetBrains color scheme that uses 32 colors by having
+    separate palettes for foreground and background colors.
+The program performs well without quantization, but if you want to reduce the
 number of colors in the output, you can use the `-quantization` option. The
 default is `256` colors. This isn't the output colors, but the number of
 colors used in the quantization step.
+
+There are three color space options available: `RGB`, `Lab`, and `Redmean`. 
+The most perceptually accurate is `Lab`, but it is also the slowest. The
+default is `Redmean`.
 
 **Image Size**
 
@@ -111,26 +125,24 @@ default `-scale` is `2`, which approximately halves the height of the output,
 to compensate for the fact that characters are taller than they are wide.
 
 ```
-  -8bit
-    	Use 8-bit ANSI colors (256 colors)
   -cache_threshold float
     	Threshold for block cache (default 40)
+  -colormethod string
+    	Color distance method: RGB, LAB, or Redmean (default "RGB")
   -input string
     	Path to the input image file (required)
-  -jb
-    	Use JetBrains color scheme
   -kdsearch int
     	Number of nearest neighbors to search in KD-tree, 0 to disable (default 50)
   -maxchars int
     	Maximum number of characters in the output (default 1048576)
   -output string
     	Path to save the output (if not specified, prints to stdout)
+  -palette string
+    	Path to the palette file (Embedded: ansi16, ansi256, jetbrains32) (default "ansi16")
   -quantization int
     	Quantization factor (default 256)
   -scale float
     	Scale factor for the output image (default 2)
-  -table
-    	Print ANSI color table
   -width int
     	Target width of the output image (default 80)
 ```
