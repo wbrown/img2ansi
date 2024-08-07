@@ -13,7 +13,7 @@ import (
 // background colors at the specified position in an image. The function
 // takes a pointer to an image, the x and y coordinates of the block, and
 // the block character to draw.
-func drawBlock(img *image.RGBA, x, y int, block BlockRune) {
+func drawBlock(img *gocv.Mat, x, y int, block BlockRune) {
 	quad := getQuadrantsForRune(block.Rune)
 	quadrants := [4]bool{
 		quad.TopLeft,
@@ -23,49 +23,154 @@ func drawBlock(img *image.RGBA, x, y int, block BlockRune) {
 
 	for i := 0; i < 4; i++ {
 		dx, dy := i%2, i/2
-		var c color.RGBA
+		var r, g, b uint8
 		if quadrants[i] {
-			c = color.RGBA{
-				R: block.FG.R,
-				G: block.FG.G,
-				B: block.FG.B,
-				A: 255}
+			r, g, b = block.FG.R, block.FG.G, block.FG.B
 		} else {
-			c = color.RGBA{
-				block.BG.R,
-				block.BG.G,
-				block.BG.B,
-				255}
+			r, g, b = block.BG.R, block.BG.G, block.BG.B
 		}
-		img.Set(x+dx, y+dy, c)
+		img.SetUCharAt(y+dy, (x+dx)*3, b)
+		img.SetUCharAt(y+dy, (x+dx)*3+1, g)
+		img.SetUCharAt(y+dy, (x+dx)*3+2, r)
 	}
 }
 
 // saveBlocksToPNG saves a 2D array of BlockRune structs to a PNG file.
 // The function takes a 2D array of BlockRune structs and a filename as
 // strings, and returns an error if the file cannot be saved.
-func saveBlocksToPNG(blocks [][]BlockRune, filename string) error {
-	height, width := len(blocks)*2, len(blocks[0])*2
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+func saveBlocksToPNG(
+	blocks [][]BlockRune,
+	filename string,
+	targetWidth,
+	targetHeight int,
+	scaleFactor float64,
+) error {
+	blockHeight, blockWidth := len(blocks), len(blocks[0])
 
-	for y, row := range blocks {
-		for x, block := range row {
-			drawBlock(img, x*2, y*2, block)
+	var outputWidth, outputHeight int
+	if targetWidth == 0 && targetHeight == 0 {
+		// Unscaled mode: each block is 2x2 pixels
+		outputWidth = blockWidth * 2
+		outputHeight = blockHeight * 2
+	} else {
+		// Scaled mode
+		outputWidth = targetWidth
+		if outputWidth == 0 {
+			outputWidth = blockWidth * 2
+		}
+		outputHeight = targetHeight
+		if outputHeight == 0 {
+			outputHeight = int(float64(blockHeight) * 2 * scaleFactor)
 		}
 	}
 
+	// Create the output image
+	img := gocv.NewMatWithSize(outputHeight, outputWidth, gocv.MatTypeCV8UC3)
+	defer img.Close()
+
+	scaleX := float64(outputWidth) / float64(blockWidth*2)
+	scaleY := float64(outputHeight) / float64(blockHeight*2)
+
+	for y := 0; y < outputHeight; y++ {
+		for x := 0; x < outputWidth; x++ {
+			blockX := int(float64(x) / scaleX / 2)
+			blockY := int(float64(y) / scaleY / 2)
+
+			if blockX >= blockWidth {
+				blockX = blockWidth - 1
+			}
+			if blockY >= blockHeight {
+				blockY = blockHeight - 1
+			}
+
+			block := blocks[blockY][blockX]
+			quad := getQuadrantsForRune(block.Rune)
+
+			quadX := int(float64(x)/scaleX) % 2
+			quadY := int(float64(y)/scaleY) % 2
+
+			var r, g, b uint8
+			if isQuadrantActive(quad, quadX, quadY) {
+				r, g, b = block.FG.R, block.FG.G, block.FG.B
+			} else {
+				r, g, b = block.BG.R, block.BG.G, block.BG.B
+			}
+
+			img.SetUCharAt(y, x*3, b)
+			img.SetUCharAt(y, x*3+1, g)
+			img.SetUCharAt(y, x*3+2, r)
+		}
+	}
+
+	// Convert gocv.Mat to image.Image
+	bounds := image.Rect(0, 0, outputWidth, outputHeight)
+	rgbaImg := image.NewRGBA(bounds)
+	for y := 0; y < outputHeight; y++ {
+		for x := 0; x < outputWidth; x++ {
+			b := img.GetUCharAt(y, x*3)
+			g := img.GetUCharAt(y, x*3+1)
+			r := img.GetUCharAt(y, x*3+2)
+			rgbaImg.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+		}
+	}
+
+	// Save the image
 	f, createErr := os.Create(filename)
 	if createErr != nil {
 		return createErr
 	}
-	defer func(f *os.File) {
-		closeErr := f.Close()
-		if closeErr != nil {
-			println("Error closing block PNG file")
-		}
-	}(f)
+	defer f.Close()
 
-	return png.Encode(f, img)
+	return png.Encode(f, rgbaImg)
+}
+
+// isQuadrantActive returns true if the specified quadrant is active in the
+// given block rune, and false otherwise.
+func isQuadrantActive(quad Quadrants, x, y int) bool {
+	switch {
+	case x == 0 && y == 0:
+		return quad.TopLeft
+	case x == 1 && y == 0:
+		return quad.TopRight
+	case x == 0 && y == 1:
+		return quad.BottomLeft
+	case x == 1 && y == 1:
+		return quad.BottomRight
+	}
+	return false
+}
+
+func drawScaledBlock(img *gocv.Mat, x, y int, block BlockRune, scale int) {
+	quad := getQuadrantsForRune(block.Rune)
+	quadrants := [4]bool{
+		quad.TopLeft,
+		quad.TopRight,
+		quad.BottomLeft,
+		quad.BottomRight}
+
+	halfScale := scale / 2
+
+	for qy := 0; qy < 2; qy++ {
+		for qx := 0; qx < 2; qx++ {
+			var r, g, b uint8
+			if quadrants[qy*2+qx] {
+				r, g, b = block.FG.R, block.FG.G, block.FG.B
+			} else {
+				r, g, b = block.BG.R, block.BG.G, block.BG.B
+			}
+
+			// Fill the quadrant with the color
+			for dy := 0; dy < halfScale; dy++ {
+				for dx := 0; dx < halfScale; dx++ {
+					px := x + qx*halfScale + dx
+					py := y + qy*halfScale + dy
+					img.SetUCharAt(py, px*3, b)
+					img.SetUCharAt(py, px*3+1, g)
+					img.SetUCharAt(py, px*3+2, r)
+				}
+			}
+		}
+	}
 }
 
 // saveToPNG saves an image to a PNG file. The function takes an image as
