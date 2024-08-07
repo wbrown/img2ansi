@@ -367,9 +367,15 @@ func ImageToANSI(imagePath string) string {
 		}
 
 		// Write the dithered image to a file for debugging
-		if err := saveBlocksToPNG(ditheredImg, "dithered.png"); err != nil {
+		if err := saveBlocksToPNG(ditheredImg,
+			"dithered.png",
+			len(ditheredImg[0])*8,
+			int(float64(len(ditheredImg)*8)*ScaleFactor),
+			ScaleFactor,
+		); err != nil {
 			fmt.Println(err)
 		}
+
 		// Write the edges image to a file for debugging
 		if err := saveToPNG(edges, "edges.png"); err != nil {
 			fmt.Println(err)
