@@ -1,4 +1,4 @@
-package main
+package img2ansi
 
 import (
 	"fmt"
@@ -26,15 +26,15 @@ func drawBlock(img *image.RGBA, x, y int, block BlockRune) {
 		var c color.RGBA
 		if quadrants[i] {
 			c = color.RGBA{
-				R: block.FG.r,
-				G: block.FG.g,
-				B: block.FG.b,
+				R: block.FG.R,
+				G: block.FG.G,
+				B: block.FG.B,
 				A: 255}
 		} else {
 			c = color.RGBA{
-				block.BG.r,
-				block.BG.g,
-				block.BG.b,
+				block.BG.R,
+				block.BG.G,
+				block.BG.B,
 				255}
 		}
 		img.Set(x+dx, y+dy, c)

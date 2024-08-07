@@ -1,4 +1,4 @@
-package main
+package img2ansi
 
 import (
 	"math"
@@ -8,22 +8,22 @@ import (
 // that is used to store approximate matches for a given
 // block of 4 RGB values. Approximate matches are performed
 // by comparing the error of a given match to a threshold
-// value.
+// Value.
 //
-// The key of the map is a Uint256, which is a 256-bit
+// The Key of the map is a Uint256, which is a 256-bit
 // unsigned integer that is used to represent the foreground
 // and background colors of a block of 4 RGB values.
 //
-// There may be multiple matches for a given key, so the
-// value of the map is a lookupEntry, which is a struct
+// There may be multiple matches for a given Key, so the
+// Value of the map is a lookupEntry, which is a struct
 // that contains a slice of Match structs.
 type ApproximateCache map[Uint256]lookupEntry
 
 // Match is a struct that contains the rune, foreground
 // color, background color, and error of a match. The error
-// is a float64 value that represents the difference between
+// is a float64 Value that represents the difference between
 // the actual block of 4 RGB values and the pair of foreground
-// and background colors encoded in the key as an Uint256.
+// and background colors encoded in the Key as an Uint256.
 type Match struct {
 	Rune  rune
 	FG    RGB
@@ -36,7 +36,7 @@ type lookupEntry struct {
 }
 
 // AddEntry adds a new entry to the cache. The entry is
-// represented by a key, which is a Uint256, and a Match
+// represented by a Key, which is a Uint256, and a Match
 // struct that contains the rune, foreground color, background
 // color, and error of the match.
 func (cache ApproximateCache) addEntry(
@@ -70,19 +70,19 @@ func (cache ApproximateCache) addEntry(
 }
 
 // GetEntry retrieves an entry from the cache. The entry is
-// represented by a key, which is a Uint256, and a block of
+// represented by a Key, which is a Uint256, and a block of
 // 4 RGB values. The function returns the rune, foreground
-// color, background color, and a boolean value indicating
+// color, background color, and a boolean Value indicating
 // whether the entry was found in the cache.
 //
-// There may be multiple matches for a given key, so the
-// function returns the match with the lowest error value.
+// There may be multiple matches for a given Key, so the
+// function returns the match with the lowest error Value.
 func (cache ApproximateCache) getEntry(
 	k Uint256,
 	block [4]RGB,
 	isEdge bool,
 ) (rune, RGB, RGB, bool) {
-	baseThreshold := cacheThreshold
+	baseThreshold := CacheThreshold
 	if isEdge {
 		baseThreshold *= 0.7
 	}
@@ -101,10 +101,10 @@ func (cache ApproximateCache) getEntry(
 			}
 		}
 		if bestMatch != nil {
-			lookupHits++
+			LookupHits++
 			return bestMatch.Rune, bestMatch.FG, bestMatch.BG, true
 		}
 	}
-	lookupMisses++
+	LookupMisses++
 	return 0, RGB{}, RGB{}, false
 }
