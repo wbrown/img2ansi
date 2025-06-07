@@ -81,7 +81,7 @@ func (gl *GlyphLookup) FindClosestGlyph(block GlyphBitmap) GlyphInfo {
 	blockInfo := extractFeatures(block)
 
 	candidates := gl.getCandidatesByZones(blockInfo.ZoneWeights)
-	fmt.Printf("Number of candidates: %d\n", len(candidates)) // Debug print
+	// fmt.Printf("Number of candidates: %d\n", len(candidates)) // Debug print
 
 	if len(candidates) > 50 {
 		candidates = gl.filterCandidatesByWeight(candidates, blockInfo.Weight)
@@ -155,6 +155,100 @@ func (gl *GlyphLookup) getGlyphsByWeight(weight uint8) []*GlyphInfo {
 		return nil
 	}
 	return gl.WeightMap[weight]
+}
+
+// FindClosestGlyphRestricted finds the closest matching glyph from a restricted set
+func (gl *GlyphLookup) FindClosestGlyphRestricted(block GlyphBitmap, allowedChars map[rune]bool) GlyphInfo {
+	blockInfo := extractFeatures(block)
+	
+	// Get all candidates but filter by allowed chars
+	candidates := gl.getCandidatesByZones(blockInfo.ZoneWeights)
+	
+	var restrictedCandidates []*GlyphInfo
+	for _, glyph := range candidates {
+		if allowedChars[glyph.Rune] {
+			restrictedCandidates = append(restrictedCandidates, glyph)
+		}
+	}
+	
+	// If no candidates in restricted set, check all allowed chars
+	if len(restrictedCandidates) == 0 {
+		for _, glyph := range gl.Glyphs {
+			if allowedChars[glyph.Rune] {
+				restrictedCandidates = append(restrictedCandidates, &glyph)
+			}
+		}
+	}
+	
+	var bestMatch *GlyphInfo
+	bestSimilarity := -1.0
+	
+	for _, glyph := range restrictedCandidates {
+		similarity := calculateSimilarity(blockInfo, *glyph)
+		if similarity > bestSimilarity {
+			bestSimilarity = similarity
+			bestMatch = glyph
+		}
+	}
+	
+	if bestMatch == nil {
+		// Return space if no match found
+		return GlyphInfo{Rune: ' '}
+	}
+	
+	return *bestMatch
+}
+
+// Match represents a glyph match with its similarity score
+type Match struct {
+	Rune       rune
+	Similarity float64
+}
+
+// FindTopNGlyphsRestricted finds the top N matching glyphs from a restricted set
+func (gl *GlyphLookup) FindTopNGlyphsRestricted(block GlyphBitmap, allowedChars map[rune]bool, n int) []Match {
+	blockInfo := extractFeatures(block)
+	
+	// Get all candidates but filter by allowed chars
+	candidates := gl.getCandidatesByZones(blockInfo.ZoneWeights)
+	
+	var restrictedCandidates []*GlyphInfo
+	for _, glyph := range candidates {
+		if allowedChars[glyph.Rune] {
+			restrictedCandidates = append(restrictedCandidates, glyph)
+		}
+	}
+	
+	// If no candidates in restricted set, check all allowed chars
+	if len(restrictedCandidates) == 0 {
+		for _, glyph := range gl.Glyphs {
+			if allowedChars[glyph.Rune] {
+				restrictedCandidates = append(restrictedCandidates, &glyph)
+			}
+		}
+	}
+	
+	// Calculate similarities for all candidates
+	matches := make([]Match, 0, len(restrictedCandidates))
+	for _, glyph := range restrictedCandidates {
+		similarity := calculateSimilarity(blockInfo, *glyph)
+		matches = append(matches, Match{
+			Rune:       glyph.Rune,
+			Similarity: similarity,
+		})
+	}
+	
+	// Sort by similarity (highest first)
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].Similarity > matches[j].Similarity
+	})
+	
+	// Return top N
+	if len(matches) > n {
+		matches = matches[:n]
+	}
+	
+	return matches
 }
 
 func extractFeatures(bitmap GlyphBitmap) GlyphInfo {
@@ -271,40 +365,9 @@ func getBit(bitmap GlyphBitmap, x, y int) bool {
 }
 
 func calculateSimilarity(a, b GlyphInfo) float64 {
-	// Exact match gets perfect score
-	if a.Bitmap == b.Bitmap {
-		return 1.0
-	}
-
-	shapeSimilarity := calculateShapeSimilarity(a.Bitmap, b.Bitmap)
-	patternSimilarity := calculatePatternSimilarity(a.Bitmap, b.Bitmap)
-	densitySimilarity := calculateDensitySimilarity(a.Bitmap, b.Bitmap)
-
-	// Base similarity
-	baseSim := 0.7*shapeSimilarity + 0.2*patternSimilarity + 0.1*densitySimilarity
-	
-	// Character simplicity bonus
-	simplicity := calculateCharacterSimplicity(b.Bitmap)
-	simplicityBoost := 1.0 + (simplicity * 0.1 * baseSim)
-	
-	// Pattern coherence factor
-	inputCoherence := calculatePatternCoherence(a.Bitmap)
-	charCoherence := calculatePatternCoherence(b.Bitmap)
-	coherenceFactor := 1.0 - (inputCoherence - charCoherence) * 0.2
-	if coherenceFactor < 0.8 {
-		coherenceFactor = 0.8
-	}
-	
-	// Codepoint commonality boost
-	commonality := getCodepointCommonality(b.Rune)
-	
-	// Structural bonus
-	structuralBonus := calculateStructuralBonus(a.Bitmap, b.Bitmap)
-	
-	// Semantic bonus for likely matches
-	semanticBonus := calculateSemanticBonus(a.Bitmap, b.Rune)
-	
-	return baseSim * simplicityBoost * coherenceFactor * commonality * structuralBonus * semanticBonus
+	// Simple Hamming distance - count matching bits
+	matching := ^(a.Bitmap ^ b.Bitmap)  // XOR then NOT gives matching bits
+	return float64(bits.OnesCount64(uint64(matching))) / 64.0
 }
 
 const (
@@ -1272,14 +1335,8 @@ func calculatePatternCoherence(bitmap GlyphBitmap) float64 {
 
 // Use Unicode codepoint as proxy for commonality
 func getCodepointCommonality(r rune) float64 {
-	if r < 0x80 { // ASCII range
-		return 1.2
-	} else if r < 0x800 { // 2-byte UTF-8
-		return 1.1
-	} else if r < 0x10000 { // 3-byte UTF-8
-		return 1.0
-	}
-	return 0.9 // 4-byte UTF-8
+	// Remove ASCII bias - all characters are equal
+	return 1.0
 }
 
 // Boost characters that match key structural features
@@ -1669,50 +1726,125 @@ func detectPrimaryOrientation(bitmap GlyphBitmap) int {
 	return OrientationNone
 }
 
+// debugRenderGlyph shows step-by-step rendering of a glyph
+func debugRenderGlyph(ttf *truetype.Font, r rune) {
+	fmt.Printf("\n=== Debug rendering of '%c' (U+%04X) ===\n", r, r)
+	
+	face := truetype.NewFace(
+		ttf, &truetype.Options{
+			Size:    float64(GlyphHeight),
+			DPI:     72,
+			Hinting: font.HintingFull,
+		},
+	)
+	
+	img := image.NewAlpha(image.Rect(0, 0, GlyphWidth, GlyphHeight))
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.White,
+		Face: face,
+	}
+	
+	// Get glyph bounds and advance
+	bounds, advance, _ := face.GlyphBounds(r)
+	fmt.Printf("Glyph bounds: %v\n", bounds)
+	fmt.Printf("Advance: %v\n", advance)
+	
+	// Calculate horizontal centering offset
+	xOffset := fixed.Int26_6((GlyphWidth*64 - advance) / 2)
+	
+	// Calculate vertical centering offset
+	yOffset := face.Metrics().Ascent +
+		fixed.Int26_6(GlyphHeight*64-(face.Metrics().Ascent+face.Metrics().Descent))
+	
+	fmt.Printf("Face metrics - Ascent: %v, Descent: %v\n", face.Metrics().Ascent, face.Metrics().Descent)
+	fmt.Printf("X offset: %v, Y offset: %v\n", xOffset, yOffset)
+	
+	// Set the drawing point
+	d.Dot = fixed.Point26_6{
+		X: xOffset,
+		Y: yOffset,
+	}
+	
+	d.DrawString(string(r))
+	
+	// Show the raw image
+	fmt.Println("\nRaw image pixels (Alpha values):")
+	for y := 0; y < GlyphHeight; y++ {
+		fmt.Printf("Row %d: ", y)
+		for x := 0; x < GlyphWidth; x++ {
+			alpha := img.AlphaAt(x, y).A
+			fmt.Printf("%3d ", alpha)
+		}
+		fmt.Println()
+	}
+	
+	// Show which pixels would be set
+	fmt.Println("\nThresholded (>64):")
+	var bitmap GlyphBitmap
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			if img.AlphaAt(x, y).A > 64 {
+				fmt.Print("█")
+				bitmap |= 1 << (y*GlyphWidth + x)
+			} else {
+				fmt.Print("·")
+			}
+		}
+		fmt.Println()
+	}
+	
+	fmt.Printf("\nResulting bitmap: %064b\n", uint64(bitmap))
+}
+
+func renderGlyphSimple(ttf *truetype.Font, r rune) GlyphBitmap {
+	face := truetype.NewFace(
+		ttf, &truetype.Options{
+			Size:    float64(GlyphHeight),
+			DPI:     72,
+			Hinting: font.HintingFull,
+		},
+	)
+	
+	img := image.NewAlpha(image.Rect(0, 0, GlyphWidth, GlyphHeight))
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.White,
+		Face: face,
+	}
+	
+	// Get glyph bounds and advance
+	_, advance, _ := face.GlyphBounds(r)
+	
+	// Calculate horizontal centering offset
+	xOffset := fixed.Int26_6((GlyphWidth*64 - advance) / 2)
+	
+	// Calculate vertical centering offset
+	yOffset := face.Metrics().Ascent +
+		fixed.Int26_6(GlyphHeight*64-(face.Metrics().Ascent+face.Metrics().Descent))
+	
+	// Set the drawing point
+	d.Dot = fixed.Point26_6{
+		X: xOffset,
+		Y: yOffset,
+	}
+	
+	d.DrawString(string(r))
+	
+	// Convert to bitmap
+	var bitmap GlyphBitmap
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			if img.AlphaAt(x, y).A > 64 {
+				bitmap |= 1 << (y*GlyphWidth + x)
+			}
+		}
+	}
+	
+	return bitmap
+}
+
 func main() {
-	font, err := loadFont("PxPlus_IBM_BIOS.ttf")
-	safeFont, err := loadFont("FSD - PragmataProMono.ttf")
-	if err != nil {
-		panic(err)
-	}
-	glyphs := analyzeFont(font, safeFont)
-
-	//glyphLookup := NewGlyphLookup(glyphs)
-
-	// Test glyphLookup.FindClosestGlyph
-	// Loop 100 times, generate a random glyph bitmap, find the closest glyph
-	// and compare the weight
-	//for i := 0; i < 100; i++ {
-	//	// Generate a random glyph bitmap
-	//	block := GlyphBitmap(0x0000000000000000)
-	//	for j := 0; j < 64; j++ {
-	//		if rand.Intn(2) == 1 {
-	//			block |= 1 << uint(j)
-	//		}
-	//	}
-	//
-	//	// Find the closest glyph
-	//	closestGlyph := glyphLookup.FindClosestGlyph(block)
-	//
-	//	// Show the two bitmaps
-	//	println("Block:")
-	//	println(block.String())
-	//	println("Closest Glyph:")
-	//	println(closestGlyph.Bitmap.String())
-	//
-	//	// Compare the weight
-	//	if block.popCount() != closestGlyph.Weight {
-	//		print("Weight does not match\n")
-	//		println(block.String())
-	//		println(closestGlyph.Bitmap.String())
-	//		//panic("Weight does not match")
-	//	}
-	//}
-
-	// Print debug information for each glyph
-	for _, glyph := range glyphs {
-		debugPrintGlyph(glyph)
-	}
-	print(len(glyphs), " glyphs analyzed\n")
-
+	// Test Brown-style optimization
+	TestBrownDitheringStyle()
 }
