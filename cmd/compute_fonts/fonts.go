@@ -1846,5 +1846,13 @@ func renderGlyphSimple(ttf *truetype.Font, r rune) GlyphBitmap {
 
 func main() {
 	// Test Brown-style optimization
-	TestBrownDitheringStyle()
+	// TestBrownDitheringStyle()
+	// TestBrownExhaustive()
+	// TestBrownOptimized()
+	// DebugExhaustiveSearch()
+	// CheckCharacterBitmaps()
+	// FindSpaceBlocks()
+	// TestBrownQuantized()
+	// TestBrownWithDiffusion()
+	RenderAllToPNG()
 }

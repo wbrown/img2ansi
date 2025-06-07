@@ -607,3 +607,53 @@ This reinforces that **spatial resolution matters more than color depth or patte
    - Current RGB distance is perceptually non-uniform
    - Implementing LAB or other perceptual spaces could improve color selection
    - Already supported in main img2ansi, just needs integration
+
+## Additional Experiments (2025-01-07 continued)
+
+### Exhaustive Color Search for 8×8 Blocks
+
+We tested whether exhaustively searching all color pairs (like the original Brown Dithering) would improve 8×8 block rendering.
+
+#### Approaches Tested
+
+1. **Naive 2-color**: Extract 2 most common colors per block (original implementation)
+2. **Exhaustive 16-color**: Test all 240 color pairs from 16-color palette
+3. **4-color quantization**: Pre-quantize blocks to 4 colors before exhaustive search  
+4. **Error diffusion**: Add Floyd-Steinberg diffusion between blocks
+
+#### Results
+
+Character distribution percentages:
+- Naive 2-color: 22.2% spaces, well-distributed other characters
+- Exhaustive 16-color: 72.5% spaces (!)
+- Quantized 4-color: 49.5% spaces
+- With error diffusion: 58.3% spaces
+
+#### Analysis of Why Exhaustive Search Chose Spaces
+
+Investigation of blocks rendered as spaces revealed:
+- 8×8 blocks contain 48-64 unique colors with wide color ranges
+- Exhaustive search finds that a single "average" color has lower total error than any 2-color pattern
+- Example: Generic gray (128,128,128) applied to all 64 pixels vs trying to capture complex patterns
+
+This is actually the algorithm working correctly - it's identifying that these complex 8×8 regions can't be well-represented by binary patterns.
+
+#### Key Findings
+
+1. **Scale matters more than algorithm sophistication**
+   - 8×8 blocks are too coarse for natural image patterns
+   - Complex optimizations (exhaustive search, quantization, diffusion) made quality worse
+   - The simple "2 most common colors" heuristic works best at this scale
+
+2. **No error diffusion in naive approach**
+   - Unlike original Brown Dithering, the naive 8×8 processes blocks independently
+   - Adding error diffusion didn't help (58.3% spaces vs 72.5%)
+
+3. **Visual quality**
+   - User noted the quantized version was "pure noise"
+   - PNG outputs were generated for visual comparison
+   - Statistics alone don't tell the full story
+
+4. **Fundamental limitation**
+   - 9-character vocabulary (density gradients + half blocks) is insufficient for 8×8 natural image patterns
+   - Original Brown Dithering succeeds with 16 patterns that perfectly represent all possible 2×2 arrangements
