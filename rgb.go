@@ -113,14 +113,18 @@ func (rgb RGB) quantizeColor() RGB {
 	}
 }
 
-// subtract subtracts the RGB channels of another RGB color from the
-// corresponding channels of the current RGB color. The function returns
-// a new RGB color with the result of the subtraction.
-func (rgb RGB) subtract(other RGB) RGB {
-	return RGB{
-		R: uint8(math.Max(0, float64(rgb.R)-float64(other.R))),
-		G: uint8(math.Max(0, float64(rgb.G)-float64(other.G))),
-		B: uint8(math.Max(0, float64(rgb.B)-float64(other.B))),
+// RGBError represents signed color errors for dithering
+type RGBError struct {
+	R, G, B int16
+}
+
+// subtractToError calculates the signed error between two RGB colors
+// for use in error diffusion dithering
+func (rgb RGB) subtractToError(other RGB) RGBError {
+	return RGBError{
+		R: int16(rgb.R) - int16(other.R),
+		G: int16(rgb.G) - int16(other.G),
+		B: int16(rgb.B) - int16(other.B),
 	}
 }
 

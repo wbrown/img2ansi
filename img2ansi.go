@@ -157,12 +157,16 @@ func BrownDitherForBlocks(
 			for i, blockColor := range block {
 				y, x := by*2+i/2, bx*2+i%2
 				var targetColor RGB
+				// PERFORMANCE: This uses a bitwise operation on the rune value
+				// instead of looking up quadrants. The Unicode block characters
+				// are specifically chosen so their codepoints encode which
+				// quadrants are filled. This is a critical hot path optimization.
 				if (bestRune & (1 << (3 - i))) != 0 {
 					targetColor = fgColor
 				} else {
 					targetColor = bgColor
 				}
-				colorError := blockColor.subtract(targetColor)
+				colorError := blockColor.subtractToError(targetColor)
 				distributeError(img, y, x, colorError, isEdge)
 			}
 		}
@@ -181,6 +185,9 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 	var fgPaletteBlock [4]RGB
 	var bgPaletteBlock [4]RGB
 	for i, color := range block {
+		if fgClosestColor == nil || bgClosestColor == nil {
+			panic("fgClosestColor or bgClosestColor is nil")
+		}
 		fgPaletteBlock[i] = (*fgClosestColor)[color.toUint32()]
 		bgPaletteBlock[i] = (*bgClosestColor)[color.toUint32()]
 	}
@@ -197,6 +204,7 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 		var bestRune rune
 		var bestFG, bestBG RGB
 		minError := math.MaxFloat64
+
 		for _, b := range blocks {
 			fgAnsi.Iterate(func(fg, _ interface{}) {
 				fgRgb := rgbFromUint32(fg.(uint32))
@@ -215,6 +223,7 @@ func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 				})
 			})
 		}
+
 		BestBlockTime += time.Since(startBlock)
 		// Add the result to the lookup table
 		lookupTable.addEntry(blockKey, bestRune, bestFG, bestBG, block, isEdge)
@@ -312,7 +321,7 @@ func getQuadrantsForRune(char rune) Quadrants {
 // using the Floyd-Steinberg error diffusion algorithm. The function takes
 // an image, the y and x coordinates of the pixel, the error to distribute,
 // and a boolean Value indicating whether the pixel is an edge pixel.
-func distributeError(img gocv.Mat, y, x int, error RGB, isEdge bool) {
+func distributeError(img gocv.Mat, y, x int, error RGBError, isEdge bool) {
 	height, width := img.Rows(), img.Cols()
 	errorScale := 1.0
 	if isEdge {
