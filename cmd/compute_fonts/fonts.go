@@ -271,11 +271,40 @@ func getBit(bitmap GlyphBitmap, x, y int) bool {
 }
 
 func calculateSimilarity(a, b GlyphInfo) float64 {
+	// Exact match gets perfect score
+	if a.Bitmap == b.Bitmap {
+		return 1.0
+	}
+
 	shapeSimilarity := calculateShapeSimilarity(a.Bitmap, b.Bitmap)
 	patternSimilarity := calculatePatternSimilarity(a.Bitmap, b.Bitmap)
 	densitySimilarity := calculateDensitySimilarity(a.Bitmap, b.Bitmap)
 
-	return 0.7*shapeSimilarity + 0.2*patternSimilarity + 0.1*densitySimilarity
+	// Base similarity
+	baseSim := 0.7*shapeSimilarity + 0.2*patternSimilarity + 0.1*densitySimilarity
+	
+	// Character simplicity bonus
+	simplicity := calculateCharacterSimplicity(b.Bitmap)
+	simplicityBoost := 1.0 + (simplicity * 0.1 * baseSim)
+	
+	// Pattern coherence factor
+	inputCoherence := calculatePatternCoherence(a.Bitmap)
+	charCoherence := calculatePatternCoherence(b.Bitmap)
+	coherenceFactor := 1.0 - (inputCoherence - charCoherence) * 0.2
+	if coherenceFactor < 0.8 {
+		coherenceFactor = 0.8
+	}
+	
+	// Codepoint commonality boost
+	commonality := getCodepointCommonality(b.Rune)
+	
+	// Structural bonus
+	structuralBonus := calculateStructuralBonus(a.Bitmap, b.Bitmap)
+	
+	// Semantic bonus for likely matches
+	semanticBonus := calculateSemanticBonus(a.Bitmap, b.Rune)
+	
+	return baseSim * simplicityBoost * coherenceFactor * commonality * structuralBonus * semanticBonus
 }
 
 const (
@@ -305,6 +334,19 @@ func detectDiagonalLine(bitmap GlyphBitmap) int {
 }
 
 func calculateShapeSimilarity(a, b GlyphBitmap) float64 {
+	// Special handling for circular patterns
+	aCircular := isLikelyCircular(a)
+	bCircular := isLikelyCircular(b)
+	
+	if aCircular && bCircular {
+		// Both circular - compare based on size and center alignment
+		return compareCircularPatterns(a, b)
+	} else if aCircular != bCircular {
+		// One circular, one not - reduce similarity significantly
+		// This helps ensure circular patterns match circular characters
+		return calculateGeneralShapeSimilarity(a, b) * 0.7
+	}
+	
 	aDiagonal := detectDiagonalLine(a)
 	bDiagonal := detectDiagonalLine(b)
 
@@ -317,22 +359,67 @@ func calculateShapeSimilarity(a, b GlyphBitmap) float64 {
 		}
 	}
 
-	// If only one is a diagonal line, or neither are
+	// If only one is a diagonal line, reduce similarity
+	if (aDiagonal != DiagonalNone && bDiagonal == DiagonalNone) ||
+		(aDiagonal == DiagonalNone && bDiagonal != DiagonalNone) {
+		return calculateGeneralShapeSimilarity(a, b) * 0.5
+	}
+
+	return calculateGeneralShapeSimilarity(a, b)
+}
+
+// General shape similarity calculation
+func calculateGeneralShapeSimilarity(a, b GlyphBitmap) float64 {
 	aFeatures := extractShapeFeatures(a)
 	bFeatures := extractShapeFeatures(b)
 
 	// Calculate similarity based on features
-	featureSimilarity := 1 - euclideanDistance(
-		aFeatures, bFeatures,
-	)/math.Sqrt(float64(len(aFeatures)))
+	return 1 - euclideanDistance(aFeatures, bFeatures)/math.Sqrt(float64(len(aFeatures)))
+}
 
-	// If one is a diagonal and the other isn't, reduce the similarity
-	if (aDiagonal != DiagonalNone && bDiagonal == DiagonalNone) ||
-		(aDiagonal == DiagonalNone && bDiagonal != DiagonalNone) {
-		featureSimilarity *= 0.5
+// Compare two circular patterns
+func compareCircularPatterns(a, b GlyphBitmap) float64 {
+	// Compare radius (approximate by counting pixels)
+	aCount := float64(bits.OnesCount64(uint64(a)))
+	bCount := float64(bits.OnesCount64(uint64(b)))
+	
+	sizeSimilarity := 1.0 - math.Abs(aCount-bCount)/(aCount+bCount)
+	
+	// Compare center of mass
+	aCenterX, aCenterY := calculateCenterOfMass(a)
+	bCenterX, bCenterY := calculateCenterOfMass(b)
+	
+	centerDistance := math.Sqrt(math.Pow(aCenterX-bCenterX, 2) + math.Pow(aCenterY-bCenterY, 2))
+	centerSimilarity := 1.0 - centerDistance/math.Sqrt(float64(GlyphWidth*GlyphWidth+GlyphHeight*GlyphHeight))
+	
+	// Compare symmetry
+	aSymmetry := (calculateHorizontalSymmetry(a) + calculateVerticalSymmetry(a)) / 2
+	bSymmetry := (calculateHorizontalSymmetry(b) + calculateVerticalSymmetry(b)) / 2
+	symmetrySimilarity := 1.0 - math.Abs(aSymmetry-bSymmetry)
+	
+	return 0.4*sizeSimilarity + 0.3*centerSimilarity + 0.3*symmetrySimilarity
+}
+
+// Calculate center of mass
+func calculateCenterOfMass(bitmap GlyphBitmap) (float64, float64) {
+	var sumX, sumY float64
+	count := 0
+	
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			if getBit(bitmap, x, y) {
+				sumX += float64(x)
+				sumY += float64(y)
+				count++
+			}
+		}
 	}
-
-	return featureSimilarity
+	
+	if count == 0 {
+		return float64(GlyphWidth)/2, float64(GlyphHeight)/2
+	}
+	
+	return sumX/float64(count), sumY/float64(count)
 }
 
 func extractShapeFeatures(bitmap GlyphBitmap) []float64 {
@@ -999,7 +1086,7 @@ func (g GlyphBitmap) String() string {
 	for y := 0; y < GlyphHeight; y++ {
 		sb.WriteString(fmt.Sprintf("\n%d", y))
 		for x := 0; x < GlyphWidth; x++ {
-			if g&(1<<(63-y*GlyphWidth-x)) != 0 {
+			if g&(1<<(y*GlyphWidth+x)) != 0 {
 				sb.WriteString("█")
 			} else {
 				sb.WriteString("·")
@@ -1053,14 +1140,10 @@ func (info *GlyphInfo) analyzeGlyph() {
 		var rowWeight byte
 		for x := 0; x < GlyphWidth; x++ {
 			if img.AlphaAt(x, y).A > 64 {
-				// Adjust bit position:
-				// y counts from top to bottom (0 to GlyphHeight-1)
-				// x counts from left to right (0 to GlyphWidth-1)
-				// We need to reverse the bit order for each row, but
-				// keep the row order as is
-				heightShift := GlyphHeight - 1 - y
-				widthShift := GlyphWidth - 1 - x
-				bitmap |= 1 << (heightShift*GlyphWidth + widthShift)
+				// Use standard row-major bit ordering:
+				// bit position = y * width + x
+				// This ensures bit 0 = (0,0) and bit 63 = (7,7)
+				bitmap |= 1 << (y*GlyphWidth + x)
 				rowWeight++
 			}
 		}
@@ -1147,6 +1230,443 @@ func debugPrintGlyph(glyph GlyphInfo) {
 	fmt.Sprintf("Hex: 0x%04X\n", uint64(glyph.Bitmap))
 	fmt.Printf("Glyph Bitmap:\n%s\n", glyph.Bitmap.String())
 	fmt.Println(strings.Repeat("-", 20))
+}
+
+// Calculate character simplicity based on bitmap properties
+func calculateCharacterSimplicity(bitmap GlyphBitmap) float64 {
+	// Connected components (fewer = simpler)
+	components := float64(countConnectedComponents(bitmap))
+	if components == 0 {
+		components = 1
+	}
+	
+	// Edge-to-fill ratio (lower = simpler solid shapes)
+	edges := float64(bits.OnesCount64(uint64(detectEdges(bitmap))))
+	fills := float64(bits.OnesCount64(uint64(bitmap)))
+	if fills == 0 {
+		return 0.5 // Empty bitmap is somewhat simple
+	}
+	edgeRatio := edges / fills
+	
+	// Symmetry (more symmetric = simpler)
+	symmetry := calculateSymmetryScore(bitmap)
+	
+	// Combine metrics
+	return (1.0 / components) * symmetry * (2.0 - edgeRatio)
+}
+
+// Measure how coherent/organized a pattern is
+func calculatePatternCoherence(bitmap GlyphBitmap) float64 {
+	// Compactness (pixels clustered vs scattered)
+	compactness := calculateCompactness(bitmap)
+	
+	// Directional consistency
+	directionality := calculateDirectionalConsistency(bitmap)
+	
+	// Distribution variance
+	distribution := calculateDistribution(bitmap)
+	variance := calculateDistributionVariance(distribution)
+	
+	return compactness * directionality / (1.0 + variance)
+}
+
+// Use Unicode codepoint as proxy for commonality
+func getCodepointCommonality(r rune) float64 {
+	if r < 0x80 { // ASCII range
+		return 1.2
+	} else if r < 0x800 { // 2-byte UTF-8
+		return 1.1
+	} else if r < 0x10000 { // 3-byte UTF-8
+		return 1.0
+	}
+	return 0.9 // 4-byte UTF-8
+}
+
+// Boost characters that match key structural features
+func calculateStructuralBonus(input, candidate GlyphBitmap) float64 {
+	// Check if both have same primary orientation
+	inputOrientation := detectPrimaryOrientation(input)
+	candidateOrientation := detectPrimaryOrientation(candidate)
+	
+	if inputOrientation == candidateOrientation && inputOrientation != OrientationNone {
+		return 1.03 // Reduced from 1.1 to prevent overriding better shape matches
+	}
+	return 1.0
+}
+
+// Give semantic bonus to likely character matches based on pattern type
+func calculateSemanticBonus(input GlyphBitmap, candidateRune rune) float64 {
+	// Check if input looks circular
+	if isLikelyCircular(input) {
+		// Boost O, 0, and other circular characters
+		switch candidateRune {
+		case 'O', 'o', '0', 'Q', 'C', 'G', '@':
+			return 1.05
+		}
+	}
+	
+	// Check for diagonal patterns
+	diagonal := detectDiagonalLine(input)
+	if diagonal == DiagonalTopLeftToBottomRight && candidateRune == '\\' {
+		return 1.05
+	} else if diagonal == DiagonalTopRightToBottomLeft && candidateRune == '/' {
+		return 1.05
+	}
+	
+	// Check for line patterns
+	orientation := detectPrimaryOrientation(input)
+	if orientation == OrientationHorizontal && (candidateRune == '-' || candidateRune == '_' || candidateRune == '=' || candidateRune == '—') {
+		return 1.05
+	} else if orientation == OrientationVertical && (candidateRune == '|' || candidateRune == 'I' || candidateRune == 'l' || candidateRune == '1') {
+		return 1.05
+	}
+	
+	// Check for cross/plus patterns
+	if isCrossPattern(input) && (candidateRune == '+' || candidateRune == 'x' || candidateRune == 'X' || candidateRune == '*') {
+		return 1.05
+	}
+	
+	return 1.0
+}
+
+// Check if pattern looks like a cross/plus
+func isCrossPattern(bitmap GlyphBitmap) bool {
+	// Check for strong central vertical and horizontal lines
+	hasVertical := false
+	hasHorizontal := false
+	
+	// Check middle column
+	middleCol := 0
+	for y := 0; y < GlyphHeight; y++ {
+		if getBit(bitmap, GlyphWidth/2, y) {
+			middleCol++
+		}
+	}
+	hasVertical = middleCol >= GlyphHeight*2/3
+	
+	// Check middle row
+	middleRow := 0
+	for x := 0; x < GlyphWidth; x++ {
+		if getBit(bitmap, x, GlyphHeight/2) {
+			middleRow++
+		}
+	}
+	hasHorizontal = middleRow >= GlyphWidth*2/3
+	
+	return hasVertical && hasHorizontal
+}
+
+// Count connected components using flood fill
+func countConnectedComponents(bitmap GlyphBitmap) int {
+	visited := uint64(0)
+	components := 0
+	
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			pos := y*GlyphWidth + x
+			if getBit(bitmap, x, y) && (visited&(1<<pos)) == 0 {
+				components++
+				// Flood fill this component
+				floodFill(bitmap, x, y, &visited)
+			}
+		}
+	}
+	
+	return components
+}
+
+// Flood fill helper
+func floodFill(bitmap GlyphBitmap, x, y int, visited *uint64) {
+	if x < 0 || x >= GlyphWidth || y < 0 || y >= GlyphHeight {
+		return
+	}
+	
+	pos := y*GlyphWidth + x
+	if !getBit(bitmap, x, y) || (*visited&(1<<pos)) != 0 {
+		return
+	}
+	
+	*visited |= 1 << pos
+	
+	// 8-connectivity
+	floodFill(bitmap, x-1, y, visited)
+	floodFill(bitmap, x+1, y, visited)
+	floodFill(bitmap, x, y-1, visited)
+	floodFill(bitmap, x, y+1, visited)
+	floodFill(bitmap, x-1, y-1, visited)
+	floodFill(bitmap, x+1, y-1, visited)
+	floodFill(bitmap, x-1, y+1, visited)
+	floodFill(bitmap, x+1, y+1, visited)
+}
+
+// Calculate symmetry score (0-1)
+func calculateSymmetryScore(bitmap GlyphBitmap) float64 {
+	horizontalSym := calculateHorizontalSymmetry(bitmap)
+	verticalSym := calculateVerticalSymmetry(bitmap)
+	
+	// Return the better symmetry
+	if horizontalSym > verticalSym {
+		return horizontalSym
+	}
+	return verticalSym
+}
+
+func calculateHorizontalSymmetry(bitmap GlyphBitmap) float64 {
+	matches := 0
+	total := 0
+	
+	for y := 0; y < GlyphHeight/2; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			topBit := getBit(bitmap, x, y)
+			bottomBit := getBit(bitmap, x, GlyphHeight-1-y)
+			if topBit == bottomBit {
+				matches++
+			}
+			total++
+		}
+	}
+	
+	return float64(matches) / float64(total)
+}
+
+func calculateVerticalSymmetry(bitmap GlyphBitmap) float64 {
+	matches := 0
+	total := 0
+	
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth/2; x++ {
+			leftBit := getBit(bitmap, x, y)
+			rightBit := getBit(bitmap, GlyphWidth-1-x, y)
+			if leftBit == rightBit {
+				matches++
+			}
+			total++
+		}
+	}
+	
+	return float64(matches) / float64(total)
+}
+
+// Calculate how compact/clustered the pixels are
+func calculateCompactness(bitmap GlyphBitmap) float64 {
+	if bitmap == 0 {
+		return 1.0 // Empty is perfectly compact
+	}
+	
+	// Find bounding box
+	minX, minY := GlyphWidth, GlyphHeight
+	maxX, maxY := -1, -1
+	
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			if getBit(bitmap, x, y) {
+				if x < minX { minX = x }
+				if x > maxX { maxX = x }
+				if y < minY { minY = y }
+				if y > maxY { maxY = y }
+			}
+		}
+	}
+	
+	if maxX < 0 {
+		return 1.0 // No pixels
+	}
+	
+	// Calculate density within bounding box
+	boxWidth := maxX - minX + 1
+	boxHeight := maxY - minY + 1
+	boxArea := boxWidth * boxHeight
+	
+	pixelCount := bits.OnesCount64(uint64(bitmap))
+	
+	return float64(pixelCount) / float64(boxArea)
+}
+
+// Calculate directional consistency
+func calculateDirectionalConsistency(bitmap GlyphBitmap) float64 {
+	if bitmap == 0 {
+		return 1.0
+	}
+	
+	// Calculate gradient directions for each pixel
+	var dx, dy float64
+	count := 0
+	
+	for y := 1; y < GlyphHeight-1; y++ {
+		for x := 1; x < GlyphWidth-1; x++ {
+			if getBit(bitmap, x, y) {
+				// Simple gradient
+				if getBit(bitmap, x+1, y) != getBit(bitmap, x-1, y) {
+					if getBit(bitmap, x+1, y) {
+						dx += 1
+					} else {
+						dx -= 1
+					}
+				}
+				if getBit(bitmap, x, y+1) != getBit(bitmap, x, y-1) {
+					if getBit(bitmap, x, y+1) {
+						dy += 1
+					} else {
+						dy -= 1
+					}
+				}
+				count++
+			}
+		}
+	}
+	
+	if count == 0 {
+		return 1.0
+	}
+	
+	// Normalize and calculate consistency
+	dx /= float64(count)
+	dy /= float64(count)
+	
+	magnitude := math.Sqrt(dx*dx + dy*dy)
+	
+	// Higher magnitude means more consistent direction
+	return math.Min(magnitude, 1.0)
+}
+
+// Calculate variance of distribution
+func calculateDistributionVariance(dist [4]float64) float64 {
+	mean := (dist[0] + dist[1] + dist[2] + dist[3]) / 4.0
+	
+	variance := 0.0
+	for i := 0; i < 4; i++ {
+		diff := dist[i] - mean
+		variance += diff * diff
+	}
+	
+	return variance / 4.0
+}
+
+// Orientation detection
+const (
+	OrientationNone = iota
+	OrientationHorizontal
+	OrientationVertical
+	OrientationDiagonal
+)
+
+// Check if a bitmap is likely a circular or curved pattern
+func isLikelyCircular(bitmap GlyphBitmap) bool {
+	// Count corner pixels vs center pixels
+	cornerCount := 0
+	centerCount := 0
+	
+	// Check corners (should be empty for circles)
+	corners := [][2]int{{0,0}, {0,1}, {1,0}, {6,0}, {7,0}, {7,1}, {0,6}, {0,7}, {1,7}, {6,7}, {7,6}, {7,7}}
+	for _, c := range corners {
+		if getBit(bitmap, c[0], c[1]) {
+			cornerCount++
+		}
+	}
+	
+	// Check center area (should have pixels for circles)
+	for y := 2; y < 6; y++ {
+		for x := 2; x < 6; x++ {
+			if getBit(bitmap, x, y) {
+				centerCount++
+			}
+		}
+	}
+	
+	// High symmetry score
+	horizontalSym := calculateHorizontalSymmetry(bitmap)
+	verticalSym := calculateVerticalSymmetry(bitmap)
+	
+	// Circles have high symmetry, few corner pixels
+	// For hollow circles, we need to check if there's a ring pattern
+	// A completely hollow circle might have 0 center pixels
+	totalPixels := bits.OnesCount64(uint64(bitmap))
+	
+	// Check if this is likely a line pattern (all pixels in one row or column)
+	isVerticalLine := true
+	isHorizontalLine := true
+	for y := 0; y < GlyphHeight; y++ {
+		rowCount := horizontalProjection(bitmap, y)
+		if rowCount > 0 && rowCount < GlyphWidth*3/4 {
+			isHorizontalLine = false
+		}
+	}
+	for x := 0; x < GlyphWidth; x++ {
+		colCount := verticalProjection(bitmap, x)
+		if colCount > 0 && colCount < GlyphHeight*3/4 {
+			isVerticalLine = false
+		}
+	}
+	
+	// If it's a pure line, it's not circular
+	if isVerticalLine || isHorizontalLine {
+		return false
+	}
+	
+	// Check for ring pattern - pixels around the edge but not in center
+	isRingPattern := totalPixels >= 16 && totalPixels <= 32 && centerCount <= 4
+	
+	// Original checks for partially filled circles
+	isHollow := centerCount >= 2 && centerCount <= 8
+	isFilled := centerCount >= 8
+	
+	// Relax symmetry requirements for real fonts
+	// Many font O characters are slightly asymmetric
+	avgSymmetry := (horizontalSym + verticalSym) / 2
+	
+	return cornerCount <= 3 && (isRingPattern || isHollow || isFilled) && avgSymmetry > 0.65
+}
+
+func detectPrimaryOrientation(bitmap GlyphBitmap) int {
+	// First check if this might be a circular/curved pattern
+	if isLikelyCircular(bitmap) {
+		return OrientationNone // Circles have no primary orientation
+	}
+	
+	// Check for strong horizontal lines (consecutive rows)
+	horizontalStrength := 0
+	consecutiveHorizontal := 0
+	for y := 0; y < GlyphHeight; y++ {
+		rowCount := horizontalProjection(bitmap, y)
+		if rowCount >= GlyphWidth*3/4 {
+			consecutiveHorizontal++
+			if consecutiveHorizontal > horizontalStrength {
+				horizontalStrength = consecutiveHorizontal
+			}
+		} else {
+			consecutiveHorizontal = 0
+		}
+	}
+	
+	// Check for strong vertical lines (consecutive columns)
+	verticalStrength := 0
+	consecutiveVertical := 0
+	for x := 0; x < GlyphWidth; x++ {
+		colCount := verticalProjection(bitmap, x)
+		if colCount >= GlyphHeight*3/4 {
+			consecutiveVertical++
+			if consecutiveVertical > verticalStrength {
+				verticalStrength = consecutiveVertical
+			}
+		} else {
+			consecutiveVertical = 0
+		}
+	}
+	
+	// Check for diagonal
+	diagonalType := detectDiagonalLine(bitmap)
+	
+	if diagonalType != DiagonalNone {
+		return OrientationDiagonal
+	} else if horizontalStrength >= 2 && horizontalStrength > verticalStrength {
+		// Require at least 2 consecutive strong rows for horizontal
+		return OrientationHorizontal
+	} else if verticalStrength >= 2 {
+		// Require at least 2 consecutive strong columns for vertical
+		return OrientationVertical
+	}
+	
+	return OrientationNone
 }
 
 func main() {
