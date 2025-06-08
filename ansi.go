@@ -147,7 +147,10 @@ func (ansiData AnsiData) ToOrderedMap() *OrderedMap {
 
 // renderToAnsi renders a 2D array of BlockRune structs to an ANSI string.
 // It does not perform any compression or optimization.
-func renderToAnsi(blocks [][]BlockRune) string {
+// RenderToAnsi converts a 2D array of BlockRune to ANSI escape sequences.
+// It outputs both foreground and background colors for every character.
+// No character-specific optimizations are applied.
+func RenderToAnsi(blocks [][]BlockRune) string {
 	var sb strings.Builder
 
 	for _, row := range blocks {

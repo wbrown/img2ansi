@@ -657,3 +657,205 @@ This is actually the algorithm working correctly - it's identifying that these c
 4. **Fundamental limitation**
    - 9-character vocabulary (density gradients + half blocks) is insufficient for 8×8 natural image patterns
    - Original Brown Dithering succeeds with 16 patterns that perfectly represent all possible 2×2 arrangements
+
+## Color Selection Experiments (2025-01-07 continued)
+
+### The Space Character Problem
+
+When using exhaustive color search on 8×8 blocks, we discovered that 60-75% of blocks were rendered as spaces. Analysis revealed why:
+
+1. **Similar Colors Win**: When the algorithm finds two very similar colors (e.g., two shades of gray), using a space character (background only) or full block (foreground only) minimizes error
+2. **8×8 Complexity**: 64 pixels often contain gradients and variations that are best approximated by a single "average" color
+3. **Escape Hatch**: Space and full block characters let the algorithm avoid committing to a two-color pattern
+
+### Color Selection Strategies Tested
+
+1. **Naive Frequency**: Select the two most common colors after palette mapping
+2. **K-means Clustering**: Find two cluster centers in the block's color space
+3. **Luminance-based**: Split pixels by median luminance, find best color for each group
+4. **Contrasting Colors**: Score color pairs by both representation quality AND contrast
+5. **Edge-Aware**: Detect edges and select colors for edge vs non-edge regions
+
+Results (percentage of spaces in output):
+- Naive Frequency: 63.1%
+- K-means: 73.7% 
+- Luminance-based: 64.4%
+- Contrasting Colors: 85.0% (enforced minimum contrast)
+- Edge-Aware: 93.6%
+
+### The Radical Solution: Remove Space from Vocabulary
+
+When we removed the space character entirely:
+- Spaces: 0% (obviously)
+- Full blocks: 59.3% (replaced most spaces!)
+- Other characters distributed better
+
+This revealed that full blocks (█) are just inverted spaces - showing only foreground instead of only background.
+
+### Patterns-Only Approach
+
+Removing BOTH space and full block characters, leaving only patterns:
+- Light shade (░): 59.8%
+- Dark shade (▓): 22.2%
+- Top half (▀): 12.4%
+- Left half (▌): 5.5%
+- Quarter blocks and other patterns: 0% (not selected)
+
+**Key insight**: This produced the most visually interesting results! By forcing the algorithm to use actual two-color patterns, we got:
+- Much more texture and detail
+- Better color representation
+- No "escape hatch" to avoid using both colors
+
+### Fundamental Insights
+
+1. **Space/Full Block are Optimization Shortcuts**
+   - They let the algorithm avoid the hard problem of finding good two-color representations
+   - When forced to use patterns, output quality improves dramatically
+
+2. **8×8 Scale Challenges**
+   - 64 pixels often have too much variation for just 2 colors
+   - Algorithms correctly identify that single-color representation has lower error
+   - This is why 2×2 blocks work so much better - 4 pixels are easier to represent with 2 colors
+
+3. **Character Set Design Matters**
+   - Including "escape" characters (space, full block) hurts quality
+   - Forcing pattern use creates better visual results
+   - Limited vocabularies can be better than extensive ones
+
+4. **Contrast vs Accuracy Trade-off**
+   - Enforcing high contrast between colors makes representation worse
+   - Natural color selection (even if similar) works better
+   - The problem isn't the colors chosen, but the scale and vocabulary
+
+### Recommendations
+
+For 8×8 block rendering:
+1. **Remove or penalize single-color characters** (space, full block)
+2. **Use pattern-only character sets** for better visual quality
+3. **Accept that 8×8 is fundamentally limited** compared to 2×2
+4. **Consider 4×4 blocks** as a compromise between detail and representation quality
+
+For font-agnostic rendering:
+1. **Identify "escape" characters** in each font (solid fills, empty space)
+2. **Build pattern-focused character sets** from available glyphs
+3. **Adapt block size** to font capabilities and image content
+4. **Prefer spatial resolution** over color depth or pattern variety
+
+## Performance Summary
+
+### Computational Complexity Comparison
+
+From our experiments with Brown Dithering on 8×8 blocks:
+
+1. **Naive 2-Color Approach**:
+   - 18 combinations per block (2 colors × 9 chars × normal/inverse)
+   - Fast but limited quality
+   - Results: 22.2% spaces, even character distribution
+
+2. **Exhaustive 16-Color Search**:
+   - 2,160 combinations per block (240 color pairs × 9 chars)
+   - ~30ms per block, ~1m37s for 3200 blocks
+   - Results: 72.5% spaces (3x more than naive approach)
+   - File size: 73KB (vs 76KB naive)
+
+3. **256-Color Exhaustive (Theoretical)**:
+   - 585,720 combinations per block
+   - Estimated ~17 hours for a single image
+   - Completely impractical
+
+The original Brown Dithering on 2×2 blocks remains more tractable because:
+- Only 16 patterns to test (vs potentially 700+ characters for 8×8)
+- Smaller search space for color optimization
+- Benefits from existing optimizations (KD-trees, lookup tables, caching)
+
+## 16 vs 256 Color Palette Experiments (2025-01-08)
+
+### Dramatic Quality Improvement with Extended Palettes
+
+We tested all Brown Dithering experiments with both 16 and 256 color palettes. The results were striking:
+
+#### Visual Quality
+- **16 colors**: Classic limited-palette aesthetic, forces creative use of patterns
+- **256 colors**: Dramatically better image quality with smooth gradients and fine details
+- The mandrill face becomes clearly recognizable with 256 colors vs abstract patterns with 16
+
+#### Algorithm Performance Differences
+
+1. **DominantColorSelector (original)**:
+   - Works excellently with 256 colors (near-optimal)
+   - ~350ms for both 16 and 256 colors
+   - For 256 colors: Already near-optimal for finding representative colors
+   - For 16 colors: Still much worse than main project's 2×2 approach
+
+2. **ExhaustiveColorSelector**:
+   - 16 colors: Tests up to 240 color pairs
+   - 256 colors: Would test 65,280 pairs (timeout!)
+   - Required intelligent sampling for 256-color mode:
+     - Include dominant colors from block
+     - Sample evenly across palette  
+     - Test combinations with dominant colors
+   - With sampling: ~800ms for 100 pairs, ~5s for 1000 pairs
+
+3. **TrueExhaustiveColorSelector**:
+   - 16 colors: 2,304 combinations per block (16×16×9)
+   - 256 colors: 589,824 combinations per block (256×256×9)
+   - Completion time: ~5 minutes for full mandrill image
+   - Shows theoretical maximum quality achievable
+
+#### Key Findings
+
+1. **Heuristics Are Already Excellent (256 Colors Only)**:
+   - With 256 colors: DominantColorSelector achieves nearly identical results to TrueExhaustive
+   - 5 minutes of exhaustive search vs 350ms heuristic for marginal gains
+   - The constraint is the medium (8×8 blocks, 9 chars, 2 colors) not the algorithm
+   - **Important**: With 16 colors, even exhaustive search produces poor results compared to 2×2 blocks
+
+2. **Color Depth > Algorithm Sophistication**:
+   - 256-color DominantColor beats 16-color TrueExhaustive
+   - More colors provide more accurate representation than perfect pattern selection
+   - Diminishing returns from algorithm complexity
+
+3. **Subtle But Real Improvements**:
+   - True exhaustive does show improvements in:
+     - Color transitions and gradients
+     - Fine detail preservation
+     - Edge definition
+   - Improvements are subtle but meaningful for archival/artistic use
+
+4. **Sampling Strategies Matter**:
+   - Naive sequential sampling (colors 0-10) performs poorly
+   - Intelligent sampling (dominant colors + even distribution) essential
+   - Shows importance of algorithm design even for "exhaustive" search
+
+### Implications
+
+1. **For Production Use**:
+   - DominantColorSelector with 256 colors provides excellent quality/speed trade-off
+   - No need for exhaustive search in most cases
+   - 256 colors recommended when terminal supports it
+   - For 16-color terminals: Use main project's 2×2 Brown Dithering instead
+
+2. **For Maximum Quality**:
+   - True exhaustive search validates theoretical limits
+   - Shows there IS room for improvement beyond heuristics
+   - Useful for understanding algorithm constraints
+
+3. **For Limited Environments**:
+   - 16-color 8×8 blocks produce poor results compared to 2×2 Brown Dithering
+   - The coarse 8×8 spatial resolution cannot be overcome by better algorithms
+   - Recommendation: Use main project's 2×2 approach for 16-color terminals
+
+### Future Directions
+
+1. **Adaptive Algorithms**:
+   - Use exhaustive search only for "important" blocks (faces, edges)
+   - Heuristics for uniform areas
+   - Balance quality and performance
+
+2. **Perceptual Optimization**:
+   - Current RGB distance could be improved with LAB/perceptual metrics
+   - May close gap between heuristic and exhaustive
+
+3. **Parallel Processing**:
+   - Exhaustive search is embarrassingly parallel
+   - Could make 256-color exhaustive practical with GPU/multicore

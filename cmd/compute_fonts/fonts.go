@@ -9,7 +9,9 @@ import (
 	"io/ioutil"
 	"math"
 	"math/bits"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -143,7 +145,7 @@ func (gl *GlyphLookup) filterCandidatesByWeight(
 	var filtered []*GlyphInfo
 	for _, glyph := range candidates {
 		// Allow some tolerance
-		if abs(int(glyph.Weight)-int(targetWeight)) <= 5 {
+		if math.Abs(float64(glyph.Weight)-float64(targetWeight)) <= 5 {
 			filtered = append(filtered, glyph)
 		}
 	}
@@ -362,6 +364,32 @@ func getBit(bitmap GlyphBitmap, x, y int) bool {
 		return false
 	}
 	return bitmap&(1<<(y*GlyphWidth+x)) != 0
+}
+
+// popcount counts the number of set bits in a GlyphBitmap
+func popcount(bitmap GlyphBitmap) int {
+	count := 0
+	for i := 0; i < 64; i++ {
+		if (bitmap & (1 << i)) != 0 {
+			count++
+		}
+	}
+	return count
+}
+
+// analyzeGlyph is a helper function for tests that creates and analyzes a glyph
+func analyzeGlyph(font *truetype.Font, r rune, size float64, analyze bool) *GlyphInfo {
+	if font.Index(r) == 0 {
+		return nil
+	}
+	glyph := renderGlyph(font, r)
+	if glyph == nil {
+		return nil
+	}
+	if analyze {
+		glyph.analyzeGlyph()
+	}
+	return glyph
 }
 
 func calculateSimilarity(a, b GlyphInfo) float64 {
@@ -1100,19 +1128,13 @@ func calculateBitmapSimilarity(a, b GlyphBitmap) float64 {
 func calculateZoneSimilarity(a, b [NumZones]uint8) float64 {
 	var totalDiff float64
 	for i := 0; i < NumZones; i++ {
-		diff := float64(abs(int(a[i]) - int(b[i])))
+		diff := math.Abs(float64(a[i]) - float64(b[i]))
 		totalDiff += diff
 	}
 	maxPossibleDiff := float64(NumZones * ZoneSize * ZoneSize)
 	return 1 - (totalDiff / maxPossibleDiff)
 }
 
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
 
 var popCountTable [256]byte
 
@@ -1844,15 +1866,173 @@ func renderGlyphSimple(ttf *truetype.Font, r rune) GlyphBitmap {
 	return bitmap
 }
 
-func main() {
-	// Test Brown-style optimization
-	// TestBrownDitheringStyle()
-	// TestBrownExhaustive()
-	// TestBrownOptimized()
-	// DebugExhaustiveSearch()
-	// CheckCharacterBitmaps()
-	// FindSpaceBlocks()
-	// TestBrownQuantized()
-	// TestBrownWithDiffusion()
+func runAllExperiments() {
+	experiments := []struct {
+		name        string
+		configName  string
+	}{
+		{"style", "original"},
+		{"quantized", "quantized"},
+		{"diffusion", "diffusion"},
+		{"smart-diffusion", "smart"},
+		{"kmeans-diffusion", "kmeans"},
+		{"compare-diffusion", "compare"},
+		{"contrast-diffusion", "contrast"},
+		{"no-space", "no-space"},
+		{"patterns-only", "patterns"},
+		{"optimized", "optimized"},
+		{"exhaustive", "exhaustive"},
+		{"true-exhaustive-full", "true-exhaustive-full"},
+	}
+	
+	paletteSizes := []int{16, 256}
+	
+	fmt.Println("Running all experiments with both 16 and 256 color palettes...")
+	fmt.Println("=" + strings.Repeat("=", 60))
+	
+	successCount := 0
+	failureCount := 0
+	totalExperiments := len(experiments) * len(paletteSizes)
+	currentExperiment := 0
+	
+	for _, paletteSize := range paletteSizes {
+		fmt.Printf("\n=== %d COLOR PALETTE ===\n", paletteSize)
+		
+		for _, exp := range experiments {
+			currentExperiment++
+			fmt.Printf("\n[%d/%d] Running %s (%d colors)...\n", currentExperiment, totalExperiments, exp.name, paletteSize)
+			fmt.Println("-" + strings.Repeat("-", 40))
+			
+			err := RunBrownExperimentWithPalette(exp.configName, paletteSize)
+			if err != nil {
+				fmt.Printf("ERROR: %s (%d colors) failed: %v\n", exp.name, paletteSize, err)
+				failureCount++
+			} else {
+				fmt.Printf("SUCCESS: %s (%d colors) completed\n", exp.name, paletteSize)
+				successCount++
+			}
+		}
+	}
+	
+	fmt.Println("\n" + "=" + strings.Repeat("=", 60))
+	fmt.Printf("All experiments completed: %d successful, %d failed\n", successCount, failureCount)
+	
+	// Optionally render all results
+	fmt.Println("\nRendering all results to PNG...")
 	RenderAllToPNG()
+}
+
+func printUsage() {
+	fmt.Println("Usage: compute_fonts [command]")
+	fmt.Println("\nExperiment Commands:")
+	fmt.Println("  style              - Original Brown dithering using dominant color extraction")
+	fmt.Println("  quantized          - Brown dithering with pre-quantized color space")
+	fmt.Println("  diffusion          - Brown dithering with Floyd-Steinberg error diffusion")
+	fmt.Println("  smart-diffusion    - Enhanced error diffusion with edge detection")
+	fmt.Println("  kmeans-diffusion   - Error diffusion using k-means color clustering")
+	fmt.Println("  compare-diffusion  - Compare different diffusion strategies")
+	fmt.Println("  contrast-diffusion - Maximize contrast between foreground/background")
+	fmt.Println("  no-space           - Force pattern usage by excluding space character")
+	fmt.Println("  patterns-only      - Exclude both space and full block characters")
+	fmt.Println("  optimized          - Optimized Brown dithering with caching")
+	fmt.Println("  exhaustive         - Test all possible color pairs (slow but thorough)")
+	fmt.Println("  true-exhaustive-full - TRUE exhaustive on mandrill (first 100 blocks, VERY slow)")
+	fmt.Println("  all                - Run all experiments sequentially (both 16 & 256 colors)")
+	fmt.Println("  brown [name] [palette] - Run specific Brown experiment (palette: 16 or 256)")
+	fmt.Println("\n=== DEBUGGING & ANALYSIS TOOLS ===")
+	fmt.Println("These are not experiments but tools for understanding the algorithms:")
+	fmt.Println("\nExhaustive Algorithm Analysis:")
+	fmt.Println("  true-exhaustive    - Demo of true exhaustive (10 blocks only)")
+	fmt.Println("  debug-brown        - Debug color selection on a single block")
+	fmt.Println("  compare-exhaustive - Compare current vs true exhaustive approaches")
+	fmt.Println("  visual-exhaustive  - Visual comparison of exhaustive methods on actual block")
+	fmt.Println("  stress-exhaustive  - Stress test to find differences between methods")
+	fmt.Println("  visual-output-exhaustive - Generate test pattern comparisons")
+	fmt.Println("\nRendering Commands:")
+	fmt.Println("  render             - Render all ANSI files to PNG using font rendering")
+	fmt.Println("  render-unified     - Render using unified rendering pipeline")
+}
+
+func main() {
+	// Run test based on command line argument
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "style":
+			RunBrownExperiment("original")
+		case "quantized":
+			RunBrownExperiment("quantized")
+		case "diffusion":
+			RunBrownExperiment("diffusion")
+		case "smart-diffusion":
+			RunBrownExperiment("smart")
+		case "kmeans-diffusion":
+			RunBrownExperiment("kmeans")
+		case "compare-diffusion":
+			RunBrownExperiment("compare")
+		case "contrast-diffusion":
+			RunBrownExperiment("contrast")
+		case "no-space":
+			RunBrownExperiment("no-space")
+		case "patterns-only":
+			RunBrownExperiment("patterns")
+		case "optimized":
+			RunBrownExperiment("optimized")
+		case "exhaustive":
+			RunBrownExperiment("exhaustive")
+		case "true-exhaustive-full":
+			RunBrownExperiment("true-exhaustive-full")
+		case "all":
+			runAllExperiments()
+		case "render":
+			RenderAllToPNG()
+		case "render-unified":
+			RenderAllToPNGUnified()
+		case "debug-brown":
+			DebugBrownDithering()
+		case "compare-exhaustive":
+			CompareExhaustiveApproaches()
+		case "visual-exhaustive":
+			if err := VisualExhaustiveComparison(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "stress-exhaustive":
+			if err := ExhaustiveStressTest(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "visual-output-exhaustive":
+			if err := ExhaustiveVisualOutput(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "true-exhaustive":
+			// Run true exhaustive search demonstration
+			resized, err := LoadMandrillImage()
+			if err != nil {
+				fmt.Printf("Error loading image: %v\n", err)
+				return
+			}
+			lookup := LoadFontGlyphs()
+			if err := TrueExhaustiveBrownDithering(resized, lookup); err != nil {
+				fmt.Printf("Error running true exhaustive: %v\n", err)
+			}
+		case "brown":
+			// New consolidated brown experiments
+			if len(os.Args) > 2 {
+				// Check if third argument is palette size
+				if len(os.Args) > 3 && (os.Args[3] == "256" || os.Args[3] == "16") {
+					paletteSize, _ := strconv.Atoi(os.Args[3])
+					RunBrownExperimentWithPalette(os.Args[2], paletteSize)
+				} else {
+					RunBrownExperiment(os.Args[2])
+				}
+			} else {
+				fmt.Println("Brown experiments: original, exhaustive, diffusion, optimized, patterns")
+				fmt.Println("Usage: compute_fonts brown [experiment-name] [palette-size]")
+				fmt.Println("  palette-size: 16 (default) or 256")
+			}
+		default:
+			printUsage()
+		}
+	} else {
+		printUsage()
+	}
 }
