@@ -16,15 +16,7 @@ func colorToRGB(c color.Color) img2ansi.RGB {
 	}
 }
 
-// rgbToColor converts img2ansi.RGB to color.Color
-func rgbToColor(rgb img2ansi.RGB) color.Color {
-	return color.RGBA{
-		R: rgb.R,
-		G: rgb.G,
-		B: rgb.B,
-		A: 255,
-	}
-}
+// rgbToColor is defined in utils.go
 
 // colorsToRGBs converts a slice of color.Color to img2ansi.RGB
 func colorsToRGBs(colors []color.Color) []img2ansi.RGB {

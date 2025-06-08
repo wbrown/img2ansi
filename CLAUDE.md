@@ -358,3 +358,67 @@ For example:
 - Standard ANSI defines code 33 as "brown" (#AA5500)
 - Some terminals may render this as orange or dark yellow
 - This is not a bug in the algorithm - it's terminal-specific behavior
+
+### ANSI Color Mapping Architecture
+
+img2ansi uses a sophisticated color mapping system that's important to understand:
+
+#### 1. Palette Structure
+- **ANSI 16**: Basic colors (0-7) and bright colors (8-15)
+- **ANSI 256**: Includes three ranges:
+  - 0-15: Basic/bright colors (may differ from standalone 16-color palette!)
+  - 16-231: 6×6×6 color cube (216 colors)
+  - 232-255: 24-step grayscale ramp
+
+#### 2. Color Selection Process
+The Brown Dithering Algorithm selects colors through multiple stages:
+
+1. **Image RGB → Palette RGB**: For each pixel, find the nearest color in the palette
+   - Uses pre-computed lookup tables for O(1) performance
+   - Three distance metrics: RGB (Euclidean), LAB (perceptual), Redmean (fast perceptual)
+   - Tables map all 16.7M RGB values to palette indices
+
+2. **Block Optimization**: For each 2×2 block, find optimal (foreground, background, pattern)
+   - Tests all 16 Unicode block patterns
+   - Evaluates multiple color pairs per pattern
+   - Minimizes total error across all 4 pixels
+
+3. **RGB → ANSI Code**: Convert selected RGB colors back to ANSI codes
+   - Uses reverse lookup in palette data
+   - Maintains separate maps for foreground/background codes
+
+#### 3. Critical Implementation Details
+
+**Palette Loading**: The same color can have different RGB values in different palettes:
+```go
+// ANSI 16 palette might define color 8 as:
+ansi16[8] = RGB{85, 85, 85}   // Bright black
+
+// ANSI 256 palette might define color 8 as:
+ansi256[8] = RGB{128, 128, 128} // Different shade!
+```
+
+**ANSI Code Generation**: img2ansi generates optimal ANSI escape sequences:
+- Full blocks (█) only need background color
+- Spaces only need foreground color (which becomes invisible)
+- Adjacent blocks with same colors share escape codes
+- Uses `fgAnsi` and `bgAnsi` maps for RGB → ANSI code lookup
+
+**Color Distance Calculation**: The choice of distance metric significantly affects output:
+- **RGB**: Fast but poor for human perception (red/green seem closer than they are)
+- **LAB**: Best perceptual accuracy but slower (requires color space conversion)
+- **Redmean**: Good compromise - weights red channel based on overall redness
+
+#### 4. Common Pitfalls
+
+1. **Assuming palette consistency**: Never assume colors 0-15 are identical across palettes
+2. **Direct RGB comparison**: The nearest RGB color may not be the best perceptual match
+3. **Escape sequence parsing**: Must handle 256-color sequences (38;5;n) before basic codes
+4. **Cache key generation**: Block appearance depends on all 4 pixel colors, not just dominant
+
+#### 5. Performance Optimizations
+
+- **Pre-computed tables**: 16.7M entry lookup tables eliminate per-pixel calculations
+- **Embedded palettes**: Binary palette data compiled into executable
+- **Compressed ANSI output**: Run-length encoding for repeated colors
+- **Block caching**: Reuses calculations for visually similar blocks

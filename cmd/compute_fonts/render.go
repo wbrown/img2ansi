@@ -116,35 +116,15 @@ var (
 
 // NewANSIParser creates a parser with default settings
 func NewANSIParser() *ANSIParser {
-	// Load the ANSI 256 palette
-	fgTable, _, err := img2ansi.LoadPalette("ansi256")
-	if err != nil {
-		// Fallback to empty palette if loading fails
-		return &ANSIParser{
-			currentFg: img2ansi.RGB{255, 255, 255}, // White
-			currentBg: img2ansi.RGB{0, 0, 0},       // Black
-			defaultFg: img2ansi.RGB{255, 255, 255},
-			defaultBg: img2ansi.RGB{0, 0, 0},
-			palette:   []img2ansi.RGB{},
-		}
-	}
-	
-	// Extract RGB colors from the palette
-	palette := make([]img2ansi.RGB, len(fgTable.AnsiData))
-	for i, entry := range fgTable.AnsiData {
-		palette[i] = img2ansi.RGB{
-			R: uint8((entry.Key >> 16) & 0xFF),
-			G: uint8((entry.Key >> 8) & 0xFF),
-			B: uint8(entry.Key & 0xFF),
-		}
-	}
+	// Ensure palettes are loaded
+	loadPaletteOnce()
 	
 	return &ANSIParser{
 		currentFg: img2ansi.RGB{255, 255, 255}, // White
 		currentBg: img2ansi.RGB{0, 0, 0},       // Black
 		defaultFg: img2ansi.RGB{255, 255, 255},
 		defaultBg: img2ansi.RGB{0, 0, 0},
-		palette:   palette,
+		palette:   nil, // We'll use the global color maps instead
 	}
 }
 
@@ -226,25 +206,25 @@ func (p *ANSIParser) parseEscapeCodes(codes string) {
 
 		// Foreground colors 30-37
 		case 30, 31, 32, 33, 34, 35, 36, 37:
-			p.currentFg = p.palette[code-30]
+			p.currentFg = ansi256ToRGBForParsing(code - 30)
 
 		// Foreground colors 90-97 (bright)
 		case 90, 91, 92, 93, 94, 95, 96, 97:
-			p.currentFg = p.palette[8+code-90]
+			p.currentFg = ansi256ToRGBForParsing(8 + code - 90)
 
 		// Background colors 40-47
 		case 40, 41, 42, 43, 44, 45, 46, 47:
-			p.currentBg = p.palette[code-40]
+			p.currentBg = ansi256ToRGBForParsing(code - 40)
 
 		// Background colors 100-107 (bright)
 		case 100, 101, 102, 103, 104, 105, 106, 107:
-			p.currentBg = p.palette[8+code-100]
+			p.currentBg = ansi256ToRGBForParsing(8 + code - 100)
 
 		case 38: // Extended foreground color
 			if i+2 < len(parts) && parts[i+1] == "5" {
 				// 256-color mode
-				if colorCode, err := strconv.Atoi(parts[i+2]); err == nil && colorCode < len(p.palette) {
-					p.currentFg = p.palette[colorCode]
+				if colorCode, err := strconv.Atoi(parts[i+2]); err == nil && colorCode < 256 {
+					p.currentFg = ansi256ToRGBForParsing(colorCode)
 				}
 				i += 2
 			}
@@ -252,8 +232,8 @@ func (p *ANSIParser) parseEscapeCodes(codes string) {
 		case 48: // Extended background color
 			if i+2 < len(parts) && parts[i+1] == "5" {
 				// 256-color mode
-				if colorCode, err := strconv.Atoi(parts[i+2]); err == nil && colorCode < len(p.palette) {
-					p.currentBg = p.palette[colorCode]
+				if colorCode, err := strconv.Atoi(parts[i+2]); err == nil && colorCode < 256 {
+					p.currentBg = ansi256ToRGBForParsing(colorCode)
 				}
 				i += 2
 			}
@@ -879,10 +859,94 @@ func parseANSIFile(file *os.File) ([][]ANSIChar, error) {
 	return result, nil
 }
 
-// ansi256ToRGBForParsing is a simple helper for parsing ANSI files
-// It provides basic color mapping without needing the full palette system
+// Global palette tables loaded once
+var (
+	ansi256ColorMap  map[int]img2ansi.RGB
+	ansi16ColorMap   map[int]img2ansi.RGB
+	paletteLoaded    bool
+)
+
+// loadPaletteOnce ensures the ANSI palettes are loaded
+func loadPaletteOnce() {
+	if !paletteLoaded {
+		// Load 256 color palette
+		fgTable256, _, err := img2ansi.LoadPalette("ansi256")
+		if err != nil {
+			fmt.Printf("Warning: Failed to load ansi256 palette: %v\n", err)
+		} else {
+			// Build color map indexed by ANSI code from AnsiData
+			ansi256ColorMap = make(map[int]img2ansi.RGB)
+			for _, entry := range fgTable256.AnsiData {
+				// Parse the ANSI code from the Value field
+				// Value is like "38;5;0" for foreground
+				var colorCode int
+				if _, err := fmt.Sscanf(entry.Value, "38;5;%d", &colorCode); err == nil {
+					// Convert uint32 key to RGB
+					ansi256ColorMap[colorCode] = img2ansi.RGB{
+						R: uint8((entry.Key >> 16) & 0xFF),
+						G: uint8((entry.Key >> 8) & 0xFF),
+						B: uint8(entry.Key & 0xFF),
+					}
+				}
+			}
+		}
+		
+		// Load 16 color palette  
+		fgTable16, _, err := img2ansi.LoadPalette("ansi16")
+		if err != nil {
+			fmt.Printf("Warning: Failed to load ansi16 palette: %v\n", err)
+		} else {
+			// Build color map indexed by ANSI code from AnsiData
+			ansi16ColorMap = make(map[int]img2ansi.RGB)
+			for _, entry := range fgTable16.AnsiData {
+				// Parse the basic ANSI code
+				// For 16 colors, Value is like "30" to "37" and "90" to "97"
+				var colorCode int
+				fmt.Sscanf(entry.Value, "%d", &colorCode)
+				
+				// Map to 0-15 range
+				if colorCode >= 30 && colorCode <= 37 {
+					colorCode = colorCode - 30
+				} else if colorCode >= 90 && colorCode <= 97 {
+					colorCode = colorCode - 90 + 8
+				} else if colorCode >= 40 && colorCode <= 47 {
+					colorCode = colorCode - 40
+				} else if colorCode >= 100 && colorCode <= 107 {
+					colorCode = colorCode - 100 + 8
+				}
+				
+				// Convert uint32 key to RGB
+				ansi16ColorMap[colorCode] = img2ansi.RGB{
+					R: uint8((entry.Key >> 16) & 0xFF),
+					G: uint8((entry.Key >> 8) & 0xFF),
+					B: uint8(entry.Key & 0xFF),
+				}
+			}
+		}
+		
+		paletteLoaded = true
+	}
+}
+
+// ansi256ToRGBForParsing converts ANSI color codes to RGB using the actual palette
 func ansi256ToRGBForParsing(code int) img2ansi.RGB {
-	// Basic 16 colors
+	loadPaletteOnce()
+	
+	// First check 256-color map (it includes codes 0-15 with proper values)
+	if ansi256ColorMap != nil {
+		if color, ok := ansi256ColorMap[code]; ok {
+			return color
+		}
+	}
+	
+	// Fall back to 16-color map only if 256-color map doesn't have it
+	if code < 16 && ansi16ColorMap != nil {
+		if color, ok := ansi16ColorMap[code]; ok {
+			return color
+		}
+	}
+	
+	// Fallback to basic colors if palette loading failed or color not found
 	if code < 16 {
 		basic16 := []img2ansi.RGB{
 			{0, 0, 0}, {170, 0, 0}, {0, 170, 0}, {170, 85, 0},
@@ -892,8 +956,23 @@ func ansi256ToRGBForParsing(code int) img2ansi.RGB {
 		}
 		return basic16[code]
 	}
-	// For 256 colors, return a simple approximation
-	return img2ansi.RGB{uint8(code), uint8(code), uint8(code)}
+	
+	// For codes 16-255, use the standard ANSI 256 color formula if not in map
+	if code >= 16 && code <= 231 {
+		// 216 color cube (codes 16-231)
+		code -= 16
+		r := (code / 36) * 51
+		g := ((code % 36) / 6) * 51
+		b := (code % 6) * 51
+		return img2ansi.RGB{uint8(r), uint8(g), uint8(b)}
+	} else if code >= 232 && code <= 255 {
+		// Grayscale (codes 232-255)
+		gray := 8 + (code-232)*10
+		return img2ansi.RGB{uint8(gray), uint8(gray), uint8(gray)}
+	}
+	
+	// Default fallback
+	return img2ansi.RGB{128, 128, 128}
 }
 
 // parseANSILine parses a single line of ANSI text
@@ -913,21 +992,39 @@ func parseANSILine(line string) []ANSIChar {
 			}
 			if i < len(line) {
 				codes := strings.Split(line[start:i], ";")
-				for j, code := range codes {
+				for j := 0; j < len(codes); j++ {
+					code := codes[j]
+					var codeNum int
+					fmt.Sscanf(code, "%d", &codeNum)
+					
 					if code == "38" && j+2 < len(codes) && codes[j+1] == "5" {
-						// Foreground color
+						// 256-color foreground
 						var colorCode int
 						fmt.Sscanf(codes[j+2], "%d", &colorCode)
 						currentFG = ansi256ToRGBForParsing(colorCode)
+						j += 2 // Skip the "5" and color code
 					} else if code == "48" && j+2 < len(codes) && codes[j+1] == "5" {
-						// Background color
+						// 256-color background
 						var colorCode int
 						fmt.Sscanf(codes[j+2], "%d", &colorCode)
 						currentBG = ansi256ToRGBForParsing(colorCode)
+						j += 2 // Skip the "5" and color code
 					} else if code == "0" {
 						// Reset
 						currentFG = img2ansi.RGB{255, 255, 255}
 						currentBG = img2ansi.RGB{0, 0, 0}
+					} else if codeNum >= 30 && codeNum <= 37 {
+						// Basic foreground colors (30-37)
+						currentFG = ansi256ToRGBForParsing(codeNum - 30)
+					} else if codeNum >= 40 && codeNum <= 47 {
+						// Basic background colors (40-47)
+						currentBG = ansi256ToRGBForParsing(codeNum - 40)
+					} else if codeNum >= 90 && codeNum <= 97 {
+						// Bright foreground colors (90-97)
+						currentFG = ansi256ToRGBForParsing(codeNum - 90 + 8)
+					} else if codeNum >= 100 && codeNum <= 107 {
+						// Bright background colors (100-107)
+						currentBG = ansi256ToRGBForParsing(codeNum - 100 + 8)
 					}
 				}
 				i++ // Skip 'm'

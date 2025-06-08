@@ -2003,6 +2003,40 @@ func main() {
 			if err := ExhaustiveVisualOutput(); err != nil {
 				fmt.Printf("Error: %v\n", err)
 			}
+		case "test256":
+			fmt.Println("Run 'go test -v -run TestPaletteMapping' to test palette mapping")
+		case "debug-palette":
+			if err := DebugPalette(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "test-color-render":
+			if err := TestColorRender(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "debug-ansi-colors":
+			if err := DebugANSIColors(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "debug-specific-colors":
+			if err := DebugSpecificColors(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "debug-first-line":
+			if err := DebugFirstLine(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "test-single-char":
+			if err := TestSingleChar(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "debug-render-process":
+			if err := DebugRenderProcess(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		case "debug-ansi-parser":
+			if err := DebugANSIParser(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
 		case "true-exhaustive":
 			// Run true exhaustive search demonstration
 			resized, err := LoadMandrillImage()

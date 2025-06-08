@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/wbrown/img2ansi"
 	"image"
 	"image/color"
 	"os"
@@ -41,6 +42,11 @@ func EnsureOutputDirs() {
 }
 
 // ===== Color Palette Utilities =====
+
+// rgbToColor converts img2ansi.RGB to standard color.Color
+func rgbToColor(rgb img2ansi.RGB) color.Color {
+	return color.RGBA{R: rgb.R, G: rgb.G, B: rgb.B, A: 255}
+}
 
 // Get16ColorPalette returns the standard 16 ANSI colors
 // DEPRECATED: Use img2ansi.LoadPalette("ansi16") instead

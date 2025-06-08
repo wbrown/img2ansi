@@ -9,7 +9,7 @@ import (
 // ExhaustiveStressTest creates challenging test cases to show differences
 func ExhaustiveStressTest() error {
 	fmt.Println("=== Exhaustive Methods Stress Test ===")
-	fmt.Println("Testing with challenging color patterns...\n")
+	fmt.Println("Testing with challenging color patterns...")
 	
 	// Load palette
 	fgTable, _, err := img2ansi.LoadPalette("ansi16")
