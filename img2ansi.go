@@ -295,7 +295,7 @@ func calculateBlockError(
 		} else {
 			targetColor = bg
 		}
-		totalError += color.colorDistance(targetColor)
+		totalError += color.ColorDistance(targetColor)
 	}
 	if isEdge {
 		totalError *= 0.5
@@ -391,7 +391,7 @@ func ImageToANSI(imagePath string) string {
 
 		}
 
-		ansiImage := renderToAnsi(ditheredImg)
+		ansiImage := RenderToAnsi(ditheredImg)
 		if len(ansiImage) <= MaxChars {
 			return ansiImage
 		}
