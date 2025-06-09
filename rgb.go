@@ -226,8 +226,8 @@ var ColorDistanceMethods = []string{
 // Global variable to set the color distance method
 var CurrentColorDistanceMethod = MethodRGB
 
-// colorDistance switches between different color distance calculation methods
-func (r RGB) colorDistance(other RGB) float64 {
+// ColorDistance switches between different color distance calculation methods
+func (r RGB) ColorDistance(other RGB) float64 {
 	switch CurrentColorDistanceMethod {
 	case MethodRGB:
 		return r.colorDistanceRGB(other)

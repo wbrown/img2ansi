@@ -150,7 +150,7 @@ func (node *ColorNode) getCandidateColors(
 		nearest := node.kNearestNeighbors(color, depth)
 		for _, c := range nearest {
 			if _, seen := seenColors[c]; !seen {
-				distance := color.colorDistance(c)
+				distance := color.ColorDistance(c)
 				candidateColors = append(candidateColors,
 					colorWithDistance{
 						c,
@@ -174,7 +174,7 @@ func (node *ColorNode) nearestNeighbor(
 		return best, bestDist
 	}
 
-	dist := node.Color.colorDistance(target)
+	dist := node.Color.ColorDistance(target)
 	if dist < bestDist {
 		best = node.Color
 		bestDist = dist
@@ -244,7 +244,7 @@ func (node *ColorNode) kNearestNeighbors(target RGB, k int) []RGB {
 	heap.Init(&pq)
 
 	for _, color := range allColors {
-		dist := color.colorDistance(target)
+		dist := color.ColorDistance(target)
 		if pq.Len() < k {
 			heap.Push(&pq, ColorDistance{color, dist})
 		} else if dist < pq[0].distance {
