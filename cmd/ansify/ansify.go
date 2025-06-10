@@ -64,10 +64,29 @@ func main() {
 		"Threshold for block cache")
 	colorMethod := flag.String("colormethod",
 		"RGB", "Color distance method: RGB, LAB, or Redmean")
+	useFont := flag.Bool("usefont", false,
+		"Use font rendering for PNG output (default: false unless -font is specified)")
+	fontPath := flag.String("font", "ibm_bios",
+		"Font to use: 'ibm_bios' (embedded) or path to TTF file")
+	fontScale := flag.Int("fontscale", 2,
+		"Font scaling factor (1 = 8x8, 2 = 16x16, etc.)")
 	//printTable := flag.Bool("table", false,
 	//	"Print ANSI color table")
 	// Parse flags
 	flag.Parse()
+
+	// Auto-enable font rendering if a custom font is specified
+	useFontExplicitlySet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "usefont" {
+			useFontExplicitlySet = true
+		}
+	})
+	
+	// If user provided a custom font but didn't explicitly set usefont, enable it
+	if *fontPath != "ibm_bios" && !useFontExplicitlySet {
+		*useFont = true
+	}
 
 	// Validate required flags
 	if *inputFile == "" {
@@ -123,20 +142,70 @@ func main() {
 		return
 	}
 
-	// Generate ANSI art
-	ansiArt := img2ansi.ImageToANSI(*inputFile)
+	// Check if output is PNG and font rendering is requested
+	var fontBitmaps *img2ansi.FontBitmaps
+	fontToLoad := *fontPath
+	// Convert shorthand names to actual paths
+	if fontToLoad == "ibm_bios" {
+		fontToLoad = "fonts/PxPlus_IBM_BIOS.ttf"
+	}
+	
+	if *outputFile != "" && strings.HasSuffix(strings.ToLower(*outputFile), ".png") && *useFont {
+		// Load font for PNG output
+		var err error
+		fontBitmaps, err = img2ansi.LoadFontBitmaps(fontToLoad, "")
+		if err != nil {
+			fmt.Printf("Error loading font: %v\n", err)
+			// Continue without font rendering
+			fontBitmaps = nil
+		}
+	}
+
+	// Generate BlockRune data
+	blocks, processedWidth, processedHeight, err := img2ansi.ImageToBlocks(*inputFile)
+	if err != nil {
+		fmt.Printf("Error processing image: %v\n", err)
+		return
+	}
+
+	// Generate ANSI art from blocks
+	ansiArt := img2ansi.RenderToAnsi(blocks)
 	compressedArt := img2ansi.CompressANSI(ansiArt)
 	//compressedArt := ansiArt
 	endComputation := time.Now()
 
 	// Output result
 	if *outputFile != "" {
-		err := os.WriteFile(*outputFile, []byte(compressedArt), 0644)
-		if err != nil {
-			fmt.Printf("Error writing to file: %v\n", err)
-			return
+		if strings.HasSuffix(strings.ToLower(*outputFile), ".png") {
+			// PNG output
+			opts := img2ansi.RenderOptions{
+				UseFont:      *useFont && fontBitmaps != nil,
+				FontBitmaps:  fontBitmaps,
+				Scale:        *fontScale,
+				TargetWidth:  processedWidth * 2,
+				TargetHeight: processedHeight * 2,
+				ScaleFactor:  img2ansi.ScaleFactor,
+			}
+			err := img2ansi.SaveBlocksToPNGWithOptions(blocks, *outputFile, opts)
+			if err != nil {
+				fmt.Printf("Error writing PNG: %v\n", err)
+				return
+			}
+			fmt.Printf("PNG output written to %s\n", *outputFile)
+			if *useFont && fontBitmaps != nil {
+				fmt.Printf("Using font rendering with %s at %dx scale\n", fontToLoad, *fontScale)
+			} else if !*useFont {
+				fmt.Printf("Using geometric rendering (font rendering disabled)\n")
+			}
+		} else {
+			// ANSI output
+			err := os.WriteFile(*outputFile, []byte(compressedArt), 0644)
+			if err != nil {
+				fmt.Printf("Error writing to file: %v\n", err)
+				return
+			}
+			fmt.Printf("Output written to %s\n", *outputFile)
 		}
-		fmt.Printf("Output written to %s\n", *outputFile)
 	} else {
 		fmt.Print(compressedArt)
 	}

@@ -9,6 +9,16 @@ import (
 	"os"
 )
 
+// RenderOptions controls PNG rendering behavior
+type RenderOptions struct {
+	UseFont      bool         // Use font rendering instead of geometric
+	FontBitmaps  *FontBitmaps // Pre-loaded font bitmaps (nil = use geometric)
+	Scale        int          // Font scaling factor (1 = 8x8, 2 = 16x16, etc.)
+	TargetWidth  int          // Target width in pixels (0 = auto)
+	TargetHeight int          // Target height in pixels (0 = auto)
+	ScaleFactor  float64      // Scale factor for geometric mode
+}
+
 // drawBlock draws a 2x2 block of a rune with the given foreground and
 // background colors at the specified position in an image. The function
 // takes a pointer to an image, the x and y coordinates of the block, and
@@ -122,6 +132,31 @@ func saveBlocksToPNG(
 	defer f.Close()
 
 	return png.Encode(f, rgbaImg)
+}
+
+// SaveBlocksToPNGWithOptions saves blocks to PNG with rendering options
+func SaveBlocksToPNGWithOptions(blocks [][]BlockRune, filename string, opts RenderOptions) error {
+	// Use font rendering if requested and available
+	if opts.UseFont && opts.FontBitmaps != nil {
+		// Font-based rendering
+		if opts.Scale < 1 {
+			opts.Scale = 1
+		}
+		
+		img := opts.FontBitmaps.RenderBlocks(blocks, opts.Scale)
+		
+		// Save the image
+		f, err := os.Create(filename)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		
+		return png.Encode(f, img)
+	}
+	
+	// Fall back to geometric rendering
+	return saveBlocksToPNG(blocks, filename, opts.TargetWidth, opts.TargetHeight, opts.ScaleFactor)
 }
 
 // isQuadrantActive returns true if the specified quadrant is active in the

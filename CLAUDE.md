@@ -337,18 +337,16 @@ func (rgb RGB) subtractToError(other RGB) RGBError {
 
 **Critical Performance Detail**: The quadrant checking in the hot path uses a clever bitwise trick:
 ```go
-// PERFORMANCE: This uses a bitwise operation on the rune value
-// instead of looking up quadrants. The Unicode block characters
-// are specifically chosen so their codepoints encode which
-// quadrants are filled. This is a critical hot path optimization.
-if (bestRune & (1 << (3 - i))) != 0 {
+// The array indices encode quadrant information:
+// bit 3: top-left, bit 2: top-right, bit 1: bottom-left, bit 0: bottom-right
+if (runeIndex & (1 << (3 - i))) != 0 {
     targetColor = fgColor
 } else {
     targetColor = bgColor
 }
 ```
 
-This works because the Unicode block characters were carefully selected so their codepoint values encode the quadrant pattern. Do NOT replace with a lookup function - this is in the innermost loop and performance-critical.
+This works because the `blocks` array is ordered so that each character's index (0-15) encodes which quadrants are filled as a 4-bit pattern. The bitwise operation efficiently extracts quadrant information without lookups. Do NOT replace with a lookup function - this is in the innermost loop and performance-critical.
 
 ### Terminal Color Palette Variations
 
@@ -422,3 +420,41 @@ ansi256[8] = RGB{128, 128, 128} // Different shade!
 - **Embedded palettes**: Binary palette data compiled into executable
 - **Compressed ANSI output**: Run-length encoding for repeated colors
 - **Block caching**: Reuses calculations for visually similar blocks
+
+## Font-Based PNG Rendering
+
+The project now supports rendering ANSI output to PNG using actual font bitmaps instead of geometric shapes:
+
+### Usage Example
+
+```go
+// Load fonts (do this once at startup)
+fonts, err := LoadFontBitmaps("fonts/PxPlus_IBM_BIOS.ttf", "")
+if err != nil {
+    // Fall back to geometric rendering
+    fonts = nil
+}
+
+// Convert image to blocks (normal process)
+blocks := ImageToBlocks(img)
+
+// Save with font rendering
+opts := RenderOptions{
+    UseFont:     true,
+    FontBitmaps: fonts,
+    Scale:       2,  // 16x16 pixels per character
+}
+err = saveBlocksToPNGWithOptions(blocks, "output.png", opts)
+```
+
+### Benefits
+- **Accurate representation**: Shows how the image will actually look in a terminal
+- **Font flexibility**: Use any TrueType font (IBM BIOS, modern fonts, etc.)
+- **Scalable output**: Adjust scale factor for different resolutions
+- **Backward compatible**: Falls back to geometric rendering if fonts unavailable
+
+### Implementation Details
+- Pre-renders TrueType fonts to 8×8 bitmaps at startup
+- Stores bitmaps as 64-bit integers for efficient rendering
+- Supports primary and fallback fonts for missing glyphs
+- Integrates seamlessly with existing BlockRune architecture

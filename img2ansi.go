@@ -21,22 +21,22 @@ var (
 	CacheThreshold = 50.0
 
 	blocks = []blockDef{
-		{' ', Quadrants{false, false, false, false}}, // Empty space
-		{'▘', Quadrants{true, false, false, false}},  // Quadrant upper left
-		{'▝', Quadrants{false, true, false, false}},  // Quadrant upper right
-		{'▀', Quadrants{true, true, false, false}},   // Upper half block
-		{'▖', Quadrants{false, false, true, false}},  // Quadrant lower left
-		{'▌', Quadrants{true, false, true, false}},   // Left half block
-		{'▞', Quadrants{false, true, true, false}},   // Quadrant diagonal upper right and lower left
-		{'▛', Quadrants{true, true, true, false}},    // Three quadrants: upper left, upper right, lower left
-		{'▗', Quadrants{false, false, false, true}},  // Quadrant lower right
-		{'▚', Quadrants{true, false, false, true}},   // Quadrant diagonal upper left and lower right
-		{'▐', Quadrants{false, true, false, true}},   // Right half block
-		{'▜', Quadrants{true, true, false, true}},    // Three quadrants: upper left, upper right, lower right
-		{'▄', Quadrants{false, false, true, true}},   // Lower half block
-		{'▙', Quadrants{true, false, true, true}},    // Three quadrants: upper left, lower left, lower right
-		{'▟', Quadrants{false, true, true, true}},    // Three quadrants: upper right, lower left, lower right
-		{'█', Quadrants{true, true, true, true}},     // Full block
+		{' ', Quadrants{false, false, false, false}}, // 0000: Empty space
+		{'▗', Quadrants{false, false, false, true}},  // 0001: Quadrant lower right
+		{'▖', Quadrants{false, false, true, false}},  // 0010: Quadrant lower left
+		{'▄', Quadrants{false, false, true, true}},   // 0011: Lower half block
+		{'▝', Quadrants{false, true, false, false}},  // 0100: Quadrant upper right
+		{'▐', Quadrants{false, true, false, true}},   // 0101: Right half block
+		{'▞', Quadrants{false, true, true, false}},   // 0110: Diagonal upper right and lower left
+		{'▟', Quadrants{false, true, true, true}},    // 0111: Three quadrants: upper right, lower left, lower right
+		{'▘', Quadrants{true, false, false, false}},  // 1000: Quadrant upper left
+		{'▚', Quadrants{true, false, false, true}},   // 1001: Diagonal upper left and lower right
+		{'▌', Quadrants{true, false, true, false}},   // 1010: Left half block
+		{'▙', Quadrants{true, false, true, true}},    // 1011: Three quadrants: upper left, lower left, lower right
+		{'▀', Quadrants{true, true, false, false}},   // 1100: Upper half block
+		{'▜', Quadrants{true, true, false, true}},    // 1101: Three quadrants: upper left, upper right, lower right
+		{'▛', Quadrants{true, true, true, false}},    // 1110: Three quadrants: upper left, upper right, lower left
+		{'█', Quadrants{true, true, true, true}},     // 1111: Full block
 	}
 
 	fgAnsiRev = map[string]uint32{}
@@ -156,16 +156,24 @@ func BrownDitherForBlocks(
 			// Calculate and distribute the error
 			for i, blockColor := range block {
 				y, x := by*2+i/2, bx*2+i%2
+				// Find the index of this rune in the blocks array
+				var runeIndex int
+				for idx, b := range blocks {
+					if b.Rune == bestRune {
+						runeIndex = idx
+						break
+					}
+				}
+				
+				// The array indices encode quadrant information:
+				// bit 3: top-left, bit 2: top-right, bit 1: bottom-left, bit 0: bottom-right
 				var targetColor RGB
-				// PERFORMANCE: This uses a bitwise operation on the rune value
-				// instead of looking up quadrants. The Unicode block characters
-				// are specifically chosen so their codepoints encode which
-				// quadrants are filled. This is a critical hot path optimization.
-				if (bestRune & (1 << (3 - i))) != 0 {
+				if (runeIndex & (1 << (3 - i))) != 0 {
 					targetColor = fgColor
 				} else {
 					targetColor = bgColor
 				}
+				
 				colorError := blockColor.subtractToError(targetColor)
 				distributeError(img, y, x, colorError, isEdge)
 			}
@@ -304,9 +312,6 @@ func calculateBlockError(
 }
 
 // getQuadrantsForRune returns the quadrants for a given rune character.
-// The function takes a rune character and returns the quadrants for the
-// corresponding block character, or an empty Quadrants struct if the
-// character is not found.
 func getQuadrantsForRune(char rune) Quadrants {
 	for _, b := range blocks {
 		if b.Rune == char {
@@ -316,6 +321,7 @@ func getQuadrantsForRune(char rune) Quadrants {
 	// Return empty quadrants if character not found
 	return Quadrants{}
 }
+
 
 // distributeError distributes the error from a pixel to its neighbors
 // using the Floyd-Steinberg error diffusion algorithm. The function takes
@@ -349,12 +355,13 @@ func distributeError(img gocv.Mat, y, x int, error RGBError, isEdge bool) {
 	diffuseError(y+1, x+1, 1.0/16.0)
 }
 
-// ImageToANSI converts an image to ANSI art. The function takes the path to
-// an image file as a string and returns the image as an ANSI string.
-func ImageToANSI(imagePath string) string {
+// ImageToBlocks converts an image to BlockRune array. The function takes the path to
+// an image file as a string and returns the image as a 2D array of BlockRune.
+// Also returns the final width and height used for processing.
+func ImageToBlocks(imagePath string) ([][]BlockRune, int, int, error) {
 	img := gocv.IMRead(imagePath, gocv.IMReadAnyColor)
 	if img.Empty() {
-		return fmt.Sprintf("Could not read image from %s", imagePath)
+		return nil, 0, 0, fmt.Errorf("could not read image from %s", imagePath)
 	}
 	defer func(img *gocv.Mat) {
 		err := img.Close()
@@ -393,13 +400,23 @@ func ImageToANSI(imagePath string) string {
 
 		ansiImage := RenderToAnsi(ditheredImg)
 		if len(ansiImage) <= MaxChars {
-			return ansiImage
+			return ditheredImg, width, height, nil
 		}
 
 		width -= 2
 		height = int(float64(width) / aspectRatio / 2)
 		if width < 10 {
-			return "Image too large to fit within character limit"
+			return nil, 0, 0, fmt.Errorf("image too large to fit within character limit")
 		}
 	}
+}
+
+// ImageToANSI converts an image to ANSI art. The function takes the path to
+// an image file as a string and returns the image as an ANSI string.
+func ImageToANSI(imagePath string) string {
+	blocks, _, _, err := ImageToBlocks(imagePath)
+	if err != nil {
+		return err.Error()
+	}
+	return RenderToAnsi(blocks)
 }
