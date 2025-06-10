@@ -1,0 +1,41 @@
+# Binaries
+ansify
+compute_tables
+*.exe
+
+# Go build artifacts
+*.test
+*.out
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# Test output
+*.ans
+*.png
+!images/*.png
+!fontdata/*.glyphs
+
+# Development images
+dithered.png
+edges.png
+resized.png
+*.jpg
+*.jpeg
+
+# Go workspace files
+go.work
+go.work.sum
