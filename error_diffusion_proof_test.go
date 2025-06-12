@@ -45,11 +45,11 @@ func TestErrorDiffusionVisualProof(t *testing.T) {
 	imgCopy1 := img.Clone()
 	defer imgCopy1.Close()
 	blocks1 := BrownDitherForBlocks(imgCopy1, edges)
-	
+
 	// Save result with diffusion
 	err = SaveBlocksToPNGWithOptions(blocks1, "test_gradient_with_diffusion.png", RenderOptions{
 		UseFont: false,
-		Scale: 8,
+		Scale:   8,
 	})
 	if err != nil {
 		t.Fatalf("Failed to save with diffusion: %v", err)
@@ -64,7 +64,7 @@ func TestErrorDiffusionVisualProof(t *testing.T) {
 	// Save result without diffusion
 	err = SaveBlocksToPNGWithOptions(blocks2, "test_gradient_no_diffusion.png", RenderOptions{
 		UseFont: false,
-		Scale: 8,
+		Scale:   8,
 	})
 	if err != nil {
 		t.Fatalf("Failed to save without diffusion: %v", err)
@@ -100,10 +100,10 @@ func TestErrorDiffusionVisualProof(t *testing.T) {
 	imgCopy3 := img.Clone()
 	defer imgCopy3.Close()
 	blocks3 := BrownDitherForBlocks(imgCopy3, edges)
-	
+
 	err = SaveBlocksToPNGWithOptions(blocks3, "test_fleshtone_with_diffusion.png", RenderOptions{
 		UseFont: false,
-		Scale: 8,
+		Scale:   8,
 	})
 	if err != nil {
 		t.Fatalf("Failed to save fleshtone with diffusion: %v", err)
@@ -115,7 +115,7 @@ func TestErrorDiffusionVisualProof(t *testing.T) {
 
 	err = SaveBlocksToPNGWithOptions(blocks4, "test_fleshtone_no_diffusion.png", RenderOptions{
 		UseFont: false,
-		Scale: 8,
+		Scale:   8,
 	})
 	if err != nil {
 		t.Fatalf("Failed to save fleshtone without diffusion: %v", err)
@@ -191,7 +191,7 @@ func countColorTransitions(blocks [][]BlockRune) int {
 func saveMatAsImage(mat gocv.Mat, filename string, t *testing.T) {
 	height, width := mat.Rows(), mat.Cols()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	
+
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			b := mat.GetUCharAt(y, x*3)
@@ -200,13 +200,13 @@ func saveMatAsImage(mat gocv.Mat, filename string, t *testing.T) {
 			img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
 		}
 	}
-	
+
 	f, err := os.Create(filename)
 	if err != nil {
 		t.Fatalf("Failed to create %s: %v", filename, err)
 	}
 	defer f.Close()
-	
+
 	if err := png.Encode(f, img); err != nil {
 		t.Fatalf("Failed to encode %s: %v", filename, err)
 	}
@@ -225,26 +225,26 @@ func TestErrorDiffusionColorAccumulation(t *testing.T) {
 	// Use a color that's between palette colors
 	// RGB(128, 64, 32) should be between brown (170,85,0) and dark gray (85,85,85)
 	testColor := RGB{128, 64, 32}
-	
+
 	// Find nearest palette color using the pre-computed closest color array
 	// This is how the actual algorithm finds colors
 	index := int(testColor.R)*256*256 + int(testColor.G)*256 + int(testColor.B)
 	nearestColor := (*fgClosestColor)[index]
 	colorError := testColor.subtractToError(nearestColor)
-	
+
 	t.Logf("Test color: RGB(%d,%d,%d)", testColor.R, testColor.G, testColor.B)
 	t.Logf("Nearest palette color: RGB(%d,%d,%d)", nearestColor.R, nearestColor.G, nearestColor.B)
 	t.Logf("Error: R=%d, G=%d, B=%d", colorError.R, colorError.G, colorError.B)
-	
+
 	// The error should be non-zero
 	if colorError.R == 0 && colorError.G == 0 && colorError.B == 0 {
 		t.Skip("Test color matches palette exactly, can't test error diffusion")
 	}
-	
+
 	// Create a 4x4 test image
 	img := gocv.NewMatWithSize(4, 4, gocv.MatTypeCV8UC3)
 	defer img.Close()
-	
+
 	// Fill with test color
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
@@ -253,7 +253,7 @@ func TestErrorDiffusionColorAccumulation(t *testing.T) {
 			img.SetUCharAt(y, x*3+2, testColor.R)
 		}
 	}
-	
+
 	// Track colors before and after processing
 	colorsBefore := make([][]RGB, 4)
 	for y := 0; y < 4; y++ {
@@ -262,13 +262,13 @@ func TestErrorDiffusionColorAccumulation(t *testing.T) {
 			colorsBefore[y][x] = rgbFromVecb(img.GetVecbAt(y, x))
 		}
 	}
-	
+
 	// Process the image
 	edges := gocv.NewMatWithSize(4, 4, gocv.MatTypeCV8U)
 	defer edges.Close()
-	
+
 	_ = BrownDitherForBlocks(img, edges)
-	
+
 	// Check if any pixels changed due to error diffusion
 	pixelsChanged := 0
 	for y := 0; y < 4; y++ {
@@ -283,9 +283,9 @@ func TestErrorDiffusionColorAccumulation(t *testing.T) {
 			}
 		}
 	}
-	
+
 	t.Logf("Pixels changed by error diffusion: %d out of 16", pixelsChanged)
-	
+
 	if pixelsChanged == 0 {
 		t.Error("No pixels were changed by error diffusion - diffusion may not be working")
 	}

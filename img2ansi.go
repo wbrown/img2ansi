@@ -164,7 +164,7 @@ func BrownDitherForBlocks(
 						break
 					}
 				}
-				
+
 				// The array indices encode quadrant information:
 				// bit 3: top-left, bit 2: top-right, bit 1: bottom-left, bit 0: bottom-right
 				var targetColor RGB
@@ -173,7 +173,7 @@ func BrownDitherForBlocks(
 				} else {
 					targetColor = bgColor
 				}
-				
+
 				colorError := blockColor.subtractToError(targetColor)
 				distributeError(img, y, x, colorError, isEdge)
 			}
@@ -321,7 +321,6 @@ func getQuadrantsForRune(char rune) Quadrants {
 	// Return empty quadrants if character not found
 	return Quadrants{}
 }
-
 
 // distributeError distributes the error from a pixel to its neighbors
 // using the Floyd-Steinberg error diffusion algorithm. The function takes

@@ -14,7 +14,7 @@ func TestBlockSelection(t *testing.T) {
 	}
 
 	fmt.Println("Testing mixed color blocks:")
-	
+
 	// Test a block that should use brown
 	testBlocks := []struct {
 		name  string
@@ -67,7 +67,7 @@ func TestBlockSelection(t *testing.T) {
 		}
 		fmt.Printf("\n  Result: Rune '%c', FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
 			bestRune, fgColor.R, fgColor.G, fgColor.B, bgColor.R, bgColor.G, bgColor.B)
-		
+
 		// Show which color codes these map to
 		fgCode := "?"
 		bgCode := "?"
@@ -87,7 +87,7 @@ func TestBlockSelection(t *testing.T) {
 	// Count how many times each color is used
 	fmt.Println("\nTesting color frequency in block selection:")
 	colorCounts := make(map[RGB]int)
-	
+
 	// Generate many random-ish blocks
 	for r := 0; r < 256; r += 32 {
 		for g := 0; g < 256; g += 32 {
@@ -98,14 +98,14 @@ func TestBlockSelection(t *testing.T) {
 					{uint8((r + 32) % 256), uint8((g + 32) % 256), uint8((b + 32) % 256)},
 					{uint8((r + 48) % 256), uint8((g + 48) % 256), uint8((b + 48) % 256)},
 				}
-				
+
 				_, fgColor, bgColor := findBestBlockRepresentation(block, false)
 				colorCounts[fgColor]++
 				colorCounts[bgColor]++
 			}
 		}
 	}
-	
+
 	fmt.Println("\nColor usage frequency:")
 	for color, count := range colorCounts {
 		if count > 0 {

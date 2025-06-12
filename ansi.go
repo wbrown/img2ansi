@@ -51,7 +51,9 @@ func CompressANSI(ansiImage string) string {
 				if count > 0 {
 					compressed.WriteString(
 						formatANSICode(
-							currentFg, currentBg, currentBlock, count))
+							currentFg, currentBg, currentBlock, count,
+						),
+					)
 				}
 				currentFg, currentBg, currentBlock = fg, bg, block
 				count = 1
@@ -62,7 +64,8 @@ func CompressANSI(ansiImage string) string {
 		// Write the last block of the line
 		if count > 0 {
 			compressed.WriteString(
-				formatANSICode(currentFg, currentBg, currentBlock, count))
+				formatANSICode(currentFg, currentBg, currentBlock, count),
+			)
 		}
 		compressed.WriteString(fmt.Sprintf("%s[0m\n", ESC))
 		count = 0
@@ -145,8 +148,6 @@ func (ansiData AnsiData) ToOrderedMap() *OrderedMap {
 	return om
 }
 
-// renderToAnsi renders a 2D array of BlockRune structs to an ANSI string.
-// It does not perform any compression or optimization.
 // RenderToAnsi converts a 2D array of BlockRune to ANSI escape sequences.
 // It outputs both foreground and background colors for every character.
 // No character-specific optimizations are applied.

@@ -27,8 +27,8 @@ func TestErrorDiffusionEffect(t *testing.T) {
 			r := uint8(170)
 			g := uint8(85 + factor*85)
 			b := uint8(0 + factor*170)
-			
-			img.SetUCharAt(y, x*3, b)   // OpenCV uses BGR
+
+			img.SetUCharAt(y, x*3, b) // OpenCV uses BGR
 			img.SetUCharAt(y, x*3+1, g)
 			img.SetUCharAt(y, x*3+2, r)
 		}
@@ -40,11 +40,11 @@ func TestErrorDiffusionEffect(t *testing.T) {
 
 	// Process without error diffusion (comment out the diffusion in actual code)
 	fmt.Println("Processing gradient image...")
-	
+
 	// Count colors in the result
 	colorCounts := make(map[RGB]int)
 	blocks := BrownDitherForBlocks(img, edges)
-	
+
 	for _, row := range blocks {
 		for _, block := range row {
 			colorCounts[block.FG]++
@@ -74,7 +74,7 @@ func TestErrorDiffusionEffect(t *testing.T) {
 			r := uint8(base + (y*10)%30)
 			g := uint8(base - 20 + (x*5)%20)
 			b := uint8(base/2 - 30 + (y*7)%25)
-			
+
 			img.SetUCharAt(y, x*3, b)
 			img.SetUCharAt(y, x*3+1, g)
 			img.SetUCharAt(y, x*3+2, r)
@@ -83,7 +83,7 @@ func TestErrorDiffusionEffect(t *testing.T) {
 
 	colorCounts2 := make(map[RGB]int)
 	blocks2 := BrownDitherForBlocks(img, edges)
-	
+
 	for _, row := range blocks2 {
 		for _, block := range row {
 			colorCounts2[block.FG]++

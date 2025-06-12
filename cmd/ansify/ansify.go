@@ -82,7 +82,7 @@ func main() {
 			useFontExplicitlySet = true
 		}
 	})
-	
+
 	// If user provided a custom font but didn't explicitly set usefont, enable it
 	if *fontPath != "ibm_bios" && !useFontExplicitlySet {
 		*useFont = true
@@ -149,7 +149,7 @@ func main() {
 	if fontToLoad == "ibm_bios" {
 		fontToLoad = "fonts/PxPlus_IBM_BIOS.ttf"
 	}
-	
+
 	if *outputFile != "" && strings.HasSuffix(strings.ToLower(*outputFile), ".png") && *useFont {
 		// Load font for PNG output
 		var err error

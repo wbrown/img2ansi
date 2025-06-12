@@ -44,7 +44,7 @@ func TestColorMatching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to reload palette: %v", err)
 	}
-	
+
 	for _, tc := range testCases {
 		// Find closest color in palette
 		closest := (*fgClosestColor)[tc.input.toUint32()]
@@ -62,7 +62,7 @@ func TestColorMatching(t *testing.T) {
 		{190, 130, 70},
 		{160, 100, 40},
 	}
-	
+
 	CurrentColorDistanceMethod = MethodLAB
 	bestRune, fgColor, bgColor := findBestBlockRepresentation(brownBlock, false)
 	fmt.Printf("  Brown block -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
@@ -75,7 +75,7 @@ func TestColorMatching(t *testing.T) {
 		{255, 255, 255},
 		{0, 0, 0},
 	}
-	
+
 	bestRune, fgColor, bgColor = findBestBlockRepresentation(contrastBlock, false)
 	fmt.Printf("  Contrast block -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
 		bestRune, fgColor.R, fgColor.G, fgColor.B, bgColor.R, bgColor.G, bgColor.B)
@@ -105,7 +105,7 @@ func TestColorMatching(t *testing.T) {
 		block := [4]RGB{color, color, color, color}
 		bestRune, fgColor, bgColor := findBestBlockRepresentation(block, false)
 		fmt.Printf("  Color %d RGB(%d,%d,%d) -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
-			i, color.R, color.G, color.B, bestRune, 
+			i, color.R, color.G, color.B, bestRune,
 			fgColor.R, fgColor.G, fgColor.B,
 			bgColor.R, bgColor.G, bgColor.B)
 	}

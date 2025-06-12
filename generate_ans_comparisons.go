@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -7,7 +8,7 @@ import (
 	"gocv.io/x/gocv"
 	"io/ioutil"
 	"log"
-	
+
 	"github.com/wbrown/img2ansi"
 )
 
@@ -44,7 +45,7 @@ func main() {
 	imgCopy1 := img.Clone()
 	defer imgCopy1.Close()
 	blocksBitwise := img2ansi.BrownDitherForBlocks(imgCopy1, edges)
-	
+
 	// Generate ANSI output
 	ansiBitwise := img2ansi.RenderToAnsi(blocksBitwise)
 	err = ioutil.WriteFile("gradient_bitwise.ans", []byte(ansiBitwise), 0644)
@@ -66,7 +67,7 @@ func main() {
 	imgCopy2 := img.Clone()
 	defer imgCopy2.Close()
 	blocksNoDiff := brownDitherNoDiffusion(imgCopy2, edges)
-	
+
 	ansiNoDiff := img2ansi.RenderToAnsi(blocksNoDiff)
 	err = ioutil.WriteFile("gradient_no_diffusion.ans", []byte(ansiNoDiff), 0644)
 	if err != nil {
@@ -96,7 +97,7 @@ func main() {
 	imgCopy3 := img.Clone()
 	defer imgCopy3.Close()
 	blocksPattern := img2ansi.BrownDitherForBlocks(imgCopy3, edges)
-	
+
 	ansiPattern := img2ansi.RenderToAnsi(blocksPattern)
 	err = ioutil.WriteFile("pattern_bitwise.ans", []byte(ansiPattern), 0644)
 	if err != nil {
@@ -107,10 +108,10 @@ func main() {
 	// Create a simple test showing the 16 block characters
 	blockDemo := make([][]img2ansi.BlockRune, 2)
 	chars := []rune{
-		' ', '▘', '▝', '▀', '▖', '▌', '▞', '▛', 
+		' ', '▘', '▝', '▀', '▖', '▌', '▞', '▛',
 		'▗', '▚', '▐', '▜', '▄', '▙', '▟', '█',
 	}
-	
+
 	for i := 0; i < 2; i++ {
 		blockDemo[i] = make([]img2ansi.BlockRune, 8)
 		for j := 0; j < 8; j++ {
@@ -124,7 +125,7 @@ func main() {
 			}
 		}
 	}
-	
+
 	ansiDemo := img2ansi.RenderToAnsi(blockDemo)
 	err = ioutil.WriteFile("block_characters_demo.ans", []byte(ansiDemo), 0644)
 	if err != nil {
@@ -134,7 +135,7 @@ func main() {
 
 	fmt.Println("\nYou can now view these .ans files with:")
 	fmt.Println("  cat gradient_bitwise.ans")
-	fmt.Println("  cat gradient_no_diffusion.ans") 
+	fmt.Println("  cat gradient_no_diffusion.ans")
 	fmt.Println("  cat pattern_bitwise.ans")
 	fmt.Println("  cat block_characters_demo.ans")
 	fmt.Println("\nOr use an ANSI art viewer for better display")

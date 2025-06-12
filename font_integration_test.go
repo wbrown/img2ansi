@@ -12,12 +12,12 @@ func TestLoadRealFont(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to load IBM BIOS font: %v", err)
 	}
-	
+
 	// Check that we loaded some glyphs
 	if len(fonts.glyphs) == 0 {
 		t.Error("No glyphs were loaded from font")
 	}
-	
+
 	// Check for specific characters
 	testChars := []rune{'A', '█', '▀', '▄', ' '}
 	for _, char := range testChars {
@@ -25,7 +25,7 @@ func TestLoadRealFont(t *testing.T) {
 			t.Errorf("Expected character '%c' not found in font", char)
 		}
 	}
-	
+
 	// Test rendering with real font
 	blocks := [][]BlockRune{
 		{
@@ -39,28 +39,28 @@ func TestLoadRealFont(t *testing.T) {
 			{Rune: '▄', FG: RGB{255, 255, 0}, BG: RGB{255, 0, 255}},
 		},
 	}
-	
+
 	// Render at scale 2
 	img := fonts.RenderBlocks(blocks, 2)
 	if img == nil {
 		t.Fatal("RenderBlocks returned nil")
 	}
-	
+
 	// Save test output
 	opts := RenderOptions{
 		UseFont:     true,
 		FontBitmaps: fonts,
 		Scale:       2,
 	}
-	
+
 	tmpfile := "test_real_font_output.png"
 	defer os.Remove(tmpfile)
-	
+
 	err = SaveBlocksToPNGWithOptions(blocks, tmpfile, opts)
 	if err != nil {
 		t.Fatalf("Failed to save with real font: %v", err)
 	}
-	
+
 	// Verify file exists and has content
 	info, err := os.Stat(tmpfile)
 	if err != nil {

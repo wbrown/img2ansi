@@ -44,6 +44,7 @@ type FontGlyphData struct {
 // 1. Run: ./cmd/compute_glyphs/compute_glyphs -font yourfont.ttf -output fontdata/yourfont.glyphs
 // 2. Add: //go:embed fontdata/yourfont.glyphs
 // 3. The font will be auto-detected when loading fonts/yourfont.ttf
+//
 //go:embed fontdata/pxplus_ibm_bios.glyphs
 var fontFS embed.FS
 
@@ -80,13 +81,13 @@ func LoadFontBitmaps(primaryPath, fallbackPath string) (*FontBitmaps, error) {
 		}
 		embeddedName := strings.ToLower(strings.ReplaceAll(baseName, " ", "_")) + ".glyphs"
 		embeddedPath := "fontdata/" + embeddedName
-		
+
 		if fb, err := loadEmbeddedGlyphs(embeddedPath); err == nil {
 			// Successfully loaded from embedded data
 			return fb, nil
 		}
 	}
-	
+
 	// Fall back to loading from TTF files
 	return loadFontBitmapsFromTTF(primaryPath, fallbackPath)
 }
@@ -97,28 +98,28 @@ func loadEmbeddedGlyphs(path string) (*FontBitmaps, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read embedded glyphs: %w", err)
 	}
-	
+
 	// Create gzip reader
 	gr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
 	}
 	defer gr.Close()
-	
+
 	// Decode the data
 	var glyphData FontGlyphData
 	dec := gob.NewDecoder(gr)
 	if err := dec.Decode(&glyphData); err != nil {
 		return nil, fmt.Errorf("failed to decode glyph data: %w", err)
 	}
-	
+
 	// Create FontBitmaps from the loaded data
 	fb := &FontBitmaps{
 		glyphs:   glyphData.Glyphs,
 		fallback: make(map[rune]GlyphBitmap),
 		name:     glyphData.FontName,
 	}
-	
+
 	return fb, nil
 }
 
@@ -186,25 +187,25 @@ func loadFont(path string) (*truetype.Font, error) {
 //
 // Implementation choices and rationale:
 //
-// 1. Alpha channel image: We use image.NewAlpha instead of image.NewGray because
-//    TrueType rendering produces anti-aliased output. The alpha channel directly
-//    represents pixel coverage, giving us the most accurate representation of the
-//    glyph shape before thresholding.
+//  1. Alpha channel image: We use image.NewAlpha instead of image.NewGray because
+//     TrueType rendering produces anti-aliased output. The alpha channel directly
+//     represents pixel coverage, giving us the most accurate representation of the
+//     glyph shape before thresholding.
 //
-// 2. 25% threshold (64/255): This low threshold is critical for preserving font
-//    details. Anti-aliased text has many edge pixels with 25-75% opacity. A higher
-//    threshold (like 50%) would lose these edge pixels, making characters appear
-//    broken or too thin. For example, the dot on 'i' or thin serifs might disappear
-//    with a 50% threshold but are preserved at 25%.
+//  2. 25% threshold (64/255): This low threshold is critical for preserving font
+//     details. Anti-aliased text has many edge pixels with 25-75% opacity. A higher
+//     threshold (like 50%) would lose these edge pixels, making characters appear
+//     broken or too thin. For example, the dot on 'i' or thin serifs might disappear
+//     with a 50% threshold but are preserved at 25%.
 //
-// 3. Dynamic baseline positioning: We calculate the baseline using font metrics
-//    (ascent/descent) rather than hardcoding it. This prevents clipping of
-//    descenders (g,j,p,q,y) and ensures proper vertical centering for fonts with
-//    different proportions.
+//  3. Dynamic baseline positioning: We calculate the baseline using font metrics
+//     (ascent/descent) rather than hardcoding it. This prevents clipping of
+//     descenders (g,j,p,q,y) and ensures proper vertical centering for fonts with
+//     different proportions.
 //
-// 4. 8-point font size: We set the font size to 8 points, which works well for
-//    fonts designed for terminal use (like IBM BIOS) but may not be optimal for
-//    all fonts. This is a limitation we share with the compute_fonts implementation.
+//  4. 8-point font size: We set the font size to 8 points, which works well for
+//     fonts designed for terminal use (like IBM BIOS) but may not be optimal for
+//     all fonts. This is a limitation we share with the compute_fonts implementation.
 func renderGlyphToBitmap(ttfFont *truetype.Font, r rune) GlyphBitmap {
 	// Create font face with proper size
 	face := truetype.NewFace(ttfFont, &truetype.Options{
@@ -213,10 +214,10 @@ func renderGlyphToBitmap(ttfFont *truetype.Font, r rune) GlyphBitmap {
 		Hinting: font.HintingFull,
 	})
 	defer face.Close()
-	
+
 	// Create an 8x8 alpha image (better for anti-aliasing)
 	img := image.NewAlpha(image.Rect(0, 0, GlyphWidth, GlyphHeight))
-	
+
 	// Set up the freetype context
 	ctx := freetype.NewContext()
 	ctx.SetDPI(72)
@@ -226,17 +227,17 @@ func renderGlyphToBitmap(ttfFont *truetype.Font, r rune) GlyphBitmap {
 	ctx.SetDst(img)
 	ctx.SetSrc(image.White)
 	ctx.SetHinting(font.HintingFull)
-	
+
 	// Get glyph metrics for centering
 	// Note: This is simplified - the original uses more complex centering
 	metrics := face.Metrics()
-	
+
 	// Calculate baseline position (approximate centering)
 	// The original code has complex centering logic, but for now we'll use simple positioning
 	ascent := metrics.Ascent >> 6   // Convert from 26.6 fixed point to pixels
 	descent := metrics.Descent >> 6 // Descent is typically negative
 	baselineY := (GlyphHeight + int(ascent) - int(descent)) / 2
-	
+
 	// Draw the character
 	pt := freetype.Pt(0, baselineY)
 	ctx.DrawString(string(r), pt)
@@ -259,24 +260,24 @@ func (fb *FontBitmaps) RenderBlocks(blocks [][]BlockRune, scale int) *image.RGBA
 	if scale < 1 {
 		scale = 1
 	}
-	
+
 	height := len(blocks)
 	if height == 0 {
 		return image.NewRGBA(image.Rect(0, 0, 0, 0))
 	}
 	width := len(blocks[0])
-	
+
 	// Create output image
 	charSize := GlyphWidth * scale
 	img := image.NewRGBA(image.Rect(0, 0, width*charSize, height*charSize))
-	
+
 	// Render each block
 	for y, row := range blocks {
 		for x, block := range row {
 			fb.renderChar(img, block, x*charSize, y*charSize, scale)
 		}
 	}
-	
+
 	return img
 }
 
@@ -293,7 +294,7 @@ func (fb *FontBitmaps) renderChar(img *image.RGBA, block BlockRune, startX, star
 			return
 		}
 	}
-	
+
 	// Render the bitmap
 	fb.renderBitmap(img, bitmap, startX, startY, scale, block.FG, block.BG)
 }
@@ -306,7 +307,7 @@ func (fb *FontBitmaps) renderBitmap(img *image.RGBA, bitmap GlyphBitmap, startX,
 			if bitmap.getBit(x, y) {
 				color = fg
 			}
-			
+
 			// Apply scaling
 			for sy := 0; sy < scale; sy++ {
 				for sx := 0; sx < scale; sx++ {

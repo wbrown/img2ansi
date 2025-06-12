@@ -142,19 +142,19 @@ func SaveBlocksToPNGWithOptions(blocks [][]BlockRune, filename string, opts Rend
 		if opts.Scale < 1 {
 			opts.Scale = 1
 		}
-		
+
 		img := opts.FontBitmaps.RenderBlocks(blocks, opts.Scale)
-		
+
 		// Save the image
 		f, err := os.Create(filename)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
-		
+
 		return png.Encode(f, img)
 	}
-	
+
 	// Fall back to geometric rendering
 	return saveBlocksToPNG(blocks, filename, opts.TargetWidth, opts.TargetHeight, opts.ScaleFactor)
 }

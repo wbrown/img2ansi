@@ -48,10 +48,10 @@ func renderGlyphToBitmap(ttfFont *truetype.Font, r rune) img2ansi.GlyphBitmap {
 		Hinting: font.HintingFull,
 	})
 	defer face.Close()
-	
+
 	// Create an 8x8 alpha image (better for anti-aliasing)
 	img := image.NewAlpha(image.Rect(0, 0, img2ansi.GlyphWidth, img2ansi.GlyphHeight))
-	
+
 	// Set up the freetype context
 	ctx := freetype.NewContext()
 	ctx.SetDPI(72)
@@ -61,15 +61,15 @@ func renderGlyphToBitmap(ttfFont *truetype.Font, r rune) img2ansi.GlyphBitmap {
 	ctx.SetDst(img)
 	ctx.SetSrc(image.White)
 	ctx.SetHinting(font.HintingFull)
-	
+
 	// Get glyph metrics for centering
 	metrics := face.Metrics()
-	
+
 	// Calculate baseline position (approximate centering)
 	ascent := metrics.Ascent >> 6   // Convert from 26.6 fixed point to pixels
 	descent := metrics.Descent >> 6 // Descent is typically negative
 	baselineY := (img2ansi.GlyphHeight + int(ascent) - int(descent)) / 2
-	
+
 	// Draw the character
 	pt := freetype.Pt(0, baselineY)
 	ctx.DrawString(string(r), pt)
@@ -141,29 +141,29 @@ func computeFontGlyphs(fontPath string) (*FontGlyphData, error) {
 func saveFontGlyphData(data *FontGlyphData, outputPath string) error {
 	// Create a buffer for the compressed data
 	var buf bytes.Buffer
-	
+
 	// Create gzip writer
 	gz := gzip.NewWriter(&buf)
-	
+
 	// Create gob encoder
 	enc := gob.NewEncoder(gz)
-	
+
 	// Encode the data
 	if err := enc.Encode(data); err != nil {
 		gz.Close()
 		return fmt.Errorf("failed to encode data: %w", err)
 	}
-	
+
 	// Close gzip writer
 	if err := gz.Close(); err != nil {
 		return fmt.Errorf("failed to close gzip: %w", err)
 	}
-	
+
 	// Write to file
 	if err := ioutil.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -179,26 +179,26 @@ func main() {
 	}
 
 	log.Printf("Computing glyphs for font: %s", *inputFont)
-	
+
 	// Compute font glyphs
 	data, err := computeFontGlyphs(*inputFont)
 	if err != nil {
 		log.Fatalf("Failed to compute glyphs: %v", err)
 	}
-	
+
 	log.Printf("Computed %d glyphs", len(data.Glyphs))
-	
+
 	// Save the data
 	if err := saveFontGlyphData(data, *outputFile); err != nil {
 		log.Fatalf("Failed to save glyph data: %v", err)
 	}
-	
+
 	// Report file size
 	fileInfo, err := os.Stat(*outputFile)
 	if err == nil {
 		log.Printf("Saved glyph data to %s (%.2f KB)", *outputFile, float64(fileInfo.Size())/1024)
 	}
-	
+
 	// Generate a simple name for embedding
 	baseName := strings.TrimSuffix(filepath.Base(*inputFont), filepath.Ext(*inputFont))
 	suggestedName := strings.ToLower(strings.ReplaceAll(baseName, " ", "_")) + ".glyphs"

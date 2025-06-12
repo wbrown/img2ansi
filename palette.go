@@ -7,8 +7,8 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,7 +48,7 @@ func ReadAnsiDataFromJSON(filename string) (AnsiData, AnsiData, error) {
 	if vfsErr != nil {
 		// If the VFS fails, try the filesystem.
 		var fsErr error
-		data, fsErr = ioutil.ReadFile(filename)
+		data, fsErr = os.ReadFile(filename)
 		if fsErr != nil {
 			return nil, nil, fmt.Errorf("error reading file: %v", fsErr)
 		}
@@ -222,7 +222,7 @@ func PaletteSame(fgData AnsiData, bgData AnsiData) bool {
 	fgBgSame := true
 
 	// Check if the sizes are the same
-	if len(fgData) != len(fgData) {
+	if len(fgData) != len(bgData) {
 		fgBgSame = false
 	} else {
 		fgExist := make(map[uint32]bool)
@@ -280,7 +280,7 @@ func LoadPaletteBinary(path string) (fg, bg *ComputedTables, err error) {
 	data, vfsErr := f.ReadFile(fmt.Sprintf(template, path))
 	if vfsErr != nil {
 		var fsErr error
-		data, fsErr = ioutil.ReadFile(path)
+		data, fsErr = os.ReadFile(path)
 		if fsErr != nil {
 			return nil, nil, fmt.Errorf("failed to read file: %v", fsErr)
 		}

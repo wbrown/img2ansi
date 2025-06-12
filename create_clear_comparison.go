@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -5,7 +6,7 @@ package main
 import (
 	"gocv.io/x/gocv"
 	"log"
-	
+
 	"github.com/wbrown/img2ansi"
 )
 
@@ -46,7 +47,7 @@ func main() {
 
 	// Process the image
 	blocks := img2ansi.BrownDitherForBlocks(img, edges)
-	
+
 	// This should produce a 4x4 grid of upper half blocks
 	log.Println("Expected: All blocks should be upper half (▀) with white FG, black BG")
 	log.Println("Actual blocks:")
@@ -66,7 +67,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to save: %v", err)
 	}
-	
+
 	log.Println("\nCreated simple_upper_half_test.png")
 	log.Println("This should show white on top, black on bottom")
 }
