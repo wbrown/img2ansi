@@ -1,8 +1,9 @@
 package img2ansi
 
 import (
-	"gocv.io/x/gocv"
 	"math"
+
+	"github.com/wbrown/img2ansi/imageutil"
 )
 
 // RGB represents a color in the RGB color space with 8-bit channels,
@@ -72,12 +73,21 @@ func rgbsToUint128(colors [4]RGB) Uint128 {
 	}
 }
 
-// rgbFromVecb converts a gocv.Vecb to an RGB color
-func rgbFromVecb(color gocv.Vecb) RGB {
+// rgbFromImageutil converts an imageutil.RGB to the local RGB type.
+func rgbFromImageutil(color imageutil.RGB) RGB {
 	return RGB{
-		R: color[2],
-		G: color[1],
-		B: color[0],
+		R: color.R,
+		G: color.G,
+		B: color.B,
+	}
+}
+
+// toImageutil converts a local RGB to imageutil.RGB.
+func (rgb RGB) toImageutil() imageutil.RGB {
+	return imageutil.RGB{
+		R: rgb.R,
+		G: rgb.G,
+		B: rgb.B,
 	}
 }
 

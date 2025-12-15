@@ -2,8 +2,9 @@ package img2ansi
 
 import (
 	"fmt"
-	"gocv.io/x/gocv"
 	"testing"
+
+	"github.com/wbrown/img2ansi/imageutil"
 )
 
 func TestErrorDiffusionEffect(t *testing.T) {
@@ -16,8 +17,7 @@ func TestErrorDiffusionEffect(t *testing.T) {
 
 	// Create a simple test image with brown/gray gradient
 	width, height := 8, 8
-	img := gocv.NewMatWithSize(height, width, gocv.MatTypeCV8UC3)
-	defer img.Close()
+	img := imageutil.NewRGBAImage(width, height)
 
 	// Fill with gradient from brown to gray
 	for y := 0; y < height; y++ {
@@ -27,24 +27,21 @@ func TestErrorDiffusionEffect(t *testing.T) {
 			r := uint8(170)
 			g := uint8(85 + factor*85)
 			b := uint8(0 + factor*170)
-			
-			img.SetUCharAt(y, x*3, b)   // OpenCV uses BGR
-			img.SetUCharAt(y, x*3+1, g)
-			img.SetUCharAt(y, x*3+2, r)
+
+			img.SetRGB(x, y, imageutil.RGB{R: r, G: g, B: b})
 		}
 	}
 
 	// Create dummy edges (no edges)
-	edges := gocv.NewMatWithSize(height, width, gocv.MatTypeCV8U)
-	defer edges.Close()
+	edges := imageutil.NewGrayImage(width, height)
 
 	// Process without error diffusion (comment out the diffusion in actual code)
 	fmt.Println("Processing gradient image...")
-	
+
 	// Count colors in the result
 	colorCounts := make(map[RGB]int)
 	blocks := BrownDitherForBlocks(img, edges)
-	
+
 	for _, row := range blocks {
 		for _, block := range row {
 			colorCounts[block.FG]++
@@ -67,6 +64,7 @@ func TestErrorDiffusionEffect(t *testing.T) {
 	// Also test a natural image patch
 	fmt.Println("\nSimulating natural brown/gray image patch:")
 	// Create a more varied test pattern
+	img2 := imageutil.NewRGBAImage(width, height)
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			// Add some noise to make it more natural
@@ -74,16 +72,14 @@ func TestErrorDiffusionEffect(t *testing.T) {
 			r := uint8(base + (y*10)%30)
 			g := uint8(base - 20 + (x*5)%20)
 			b := uint8(base/2 - 30 + (y*7)%25)
-			
-			img.SetUCharAt(y, x*3, b)
-			img.SetUCharAt(y, x*3+1, g)
-			img.SetUCharAt(y, x*3+2, r)
+
+			img2.SetRGB(x, y, imageutil.RGB{R: r, G: g, B: b})
 		}
 	}
 
 	colorCounts2 := make(map[RGB]int)
-	blocks2 := BrownDitherForBlocks(img, edges)
-	
+	blocks2 := BrownDitherForBlocks(img2, edges)
+
 	for _, row := range blocks2 {
 		for _, block := range row {
 			colorCounts2[block.FG]++

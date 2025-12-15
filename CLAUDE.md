@@ -27,9 +27,22 @@ go test -v ./...
 
 ## Dependencies
 
-- **OpenCV 4** is required (uses `gocv.io/x/gocv` Go bindings)
-- Go 1.22.5 or later
+- Go 1.24 or later
+- `golang.org/x/image` for image processing
 - For font tools: `github.com/golang/freetype`
+- **Optional**: OpenCV 4 (`gocv.io/x/gocv`) - only needed for comparison tests
+
+### Note on OpenCV
+
+As of December 2024, the core image processing has been migrated to pure Go implementations in the `imageutil/` package. OpenCV is no longer required for normal builds. The gocv dependency is only used for comparison tests that validate the pure Go implementations against OpenCV:
+
+```bash
+# Normal build (no OpenCV required)
+go build ./cmd/ansify
+
+# Run comparison tests (requires OpenCV)
+go test -tags gocv_compare ./imageutil/...
+```
 
 ## The Brown Dithering Algorithm
 
@@ -80,22 +93,31 @@ The algorithm is specifically tuned for human perception:
 
 ### Core Algorithm Components
 
-1. **Block Processing Pipeline** (`img2ansi.go`):
+1. **Image Processing** (`imageutil/` package):
+   - Pure Go image processing (no OpenCV required)
+   - Image loading/saving (`io.go`)
+   - Resizing with various interpolation methods (`resize.go`)
+   - Grayscale conversion (`convert.go`)
+   - 2D convolution and sharpening (`convolve.go`)
+   - Canny edge detection (`canny.go`)
+   - `PrepareForANSI()` - main preprocessing pipeline (`prepare.go`)
+
+2. **Block Processing Pipeline** (`img2ansi.go`):
    - Processes images in 2x2 pixel blocks
-   - Implements the Brown Dithering Algorithm with `findBestBlockRepresentation`
+   - Implements the Brown Dithering Algorithm with `FindBestBlockRepresentation`
    - Integrates edge detection for detail preservation
    - Uses block caching for performance
 
-2. **Color Management** (`palette.go`, `rgb.go`):
+3. **Color Management** (`palette.go`, `rgb.go`):
    - Supports multiple color spaces (RGB, LAB, Redmean)
    - Manages embedded palettes (ANSI 16/256, JetBrains 32)
    - KD-tree search optimization for color matching
 
-3. **Character Selection**:
+4. **Character Selection**:
    - Current: Uses 16 Unicode block characters for 2x2 pixel blocks
    - In Development: Glyph matching system (see below)
 
-4. **Output Generation** (`ansi.go`, `image.go`):
+5. **Output Generation** (`ansi.go`, `image.go`):
    - Generates compressed ANSI escape sequences
    - Supports PNG output for debugging
    - Handles terminal width constraints
@@ -105,11 +127,13 @@ The algorithm is specifically tuned for human perception:
 - **KD-tree search** (`kdtree.go`): Efficient nearest-neighbor color matching
 - **Block caching** (`approximatecache.go`): Caches computation results
 - **Embedded palettes**: Precomputed binary palette data for faster loading
+- **Pure Go image processing**: No CGO overhead from OpenCV bindings
 
 ## Important Implementation Details
 
 ### Edge Detection Integration
-- Uses OpenCV's Canny edge detection (thresholds 50-150)
+- Uses pure Go Canny edge detection (`imageutil/canny.go`, thresholds 50-150)
+- Algorithm: Gaussian blur → Sobel gradients → Non-maximum suppression → Hysteresis
 - Edge blocks get 50% reduced error diffusion to preserve sharpness
 - Cache lookups use 30% reduced threshold for edge blocks
 - Generates `edges.png` for debugging
@@ -172,11 +196,13 @@ The serialization system uses multiple compression layers:
 The sophisticated serialization reduces the ~300MB of raw color tables to ~96MB embedded in the binary, while maintaining fast load times.
 
 ### Image Processing Pipeline
-1. Resize to 4x target size (better quality than direct resize)
-2. Apply mild sharpening
-3. Run Canny edge detection
-4. Apply Brown Dithering with modified Floyd-Steinberg error diffusion
-5. Generate compressed ANSI sequences
+Implemented in `imageutil.PrepareForANSI()` (pure Go):
+1. Resize to 4x target size using Catmull-Rom interpolation
+2. Convert to grayscale and run Canny edge detection
+3. Resize image and edges to 2x target size
+4. Apply mild sharpening (3x3 convolution kernel)
+5. Apply Brown Dithering with modified Floyd-Steinberg error diffusion
+6. Generate compressed ANSI sequences
 
 ### ANSI Output Compression
 - **Run-length encoding**: Combines adjacent blocks with identical colors
@@ -229,6 +255,11 @@ The sophisticated serialization reduces the ~300MB of raw color tables to ~96MB 
 ## Key Files to Understand
 
 - `img2ansi.go`: Main algorithm implementation and block processing
+- `imageutil/`: Pure Go image processing package (replaces gocv/OpenCV)
+  - `prepare.go`: Main preprocessing pipeline (`PrepareForANSI`)
+  - `canny.go`: Canny edge detection implementation
+  - `resize.go`: Image resizing with various interpolation methods
+  - `convolve.go`: 2D convolution and sharpening
 - `palette.go`: Color palette management and serialization
 - `cmd/ansify/ansify.go`: CLI interface and parameter handling
 - `cmd/compute_fonts/fonts.go`: Glyph matching system (in development)

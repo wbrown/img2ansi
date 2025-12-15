@@ -2,11 +2,12 @@ package img2ansi
 
 import (
 	"fmt"
+	_ "image/jpeg"
 	_ "image/png"
 	"math"
 	"time"
 
-	"gocv.io/x/gocv"
+	"github.com/wbrown/img2ansi/imageutil"
 )
 
 const (
@@ -117,10 +118,10 @@ type Quadrants struct {
 // returns a BlockRune representation with the dithering algorithm applied,
 // with colors quantized to the nearest ANSI color.
 func BrownDitherForBlocks(
-	img gocv.Mat,
-	edges gocv.Mat,
+	img *imageutil.RGBAImage,
+	edges *imageutil.GrayImage,
 ) [][]BlockRune {
-	height, width := img.Rows(), img.Cols()
+	height, width := img.Height(), img.Width()
 	blockHeight, blockWidth := height/2, width/2
 	result := make([][]BlockRune, blockHeight)
 	for i := range result {
@@ -129,19 +130,19 @@ func BrownDitherForBlocks(
 
 	for by := 0; by < blockHeight; by++ {
 		for bx := 0; bx < blockWidth; bx++ {
-			// Get the 2x2 block
+			// Get the 2x2 block (note: imageutil uses x,y ordering)
 			block := [4]RGB{
-				rgbFromVecb(img.GetVecbAt(by*2, bx*2)),
-				rgbFromVecb(img.GetVecbAt(by*2, bx*2+1)),
-				rgbFromVecb(img.GetVecbAt(by*2+1, bx*2)),
-				rgbFromVecb(img.GetVecbAt(by*2+1, bx*2+1)),
+				rgbFromImageutil(img.GetRGB(bx*2, by*2)),
+				rgbFromImageutil(img.GetRGB(bx*2+1, by*2)),
+				rgbFromImageutil(img.GetRGB(bx*2, by*2+1)),
+				rgbFromImageutil(img.GetRGB(bx*2+1, by*2+1)),
 			}
 
 			// Determine if this is an edge block
-			isEdge := edges.GetUCharAt(by*2, bx*2) > 128 ||
-				edges.GetUCharAt(by*2, bx*2+1) > 128 ||
-				edges.GetUCharAt(by*2+1, bx*2) > 128 ||
-				edges.GetUCharAt(by*2+1, bx*2+1) > 128
+			isEdge := edges.GrayAt(bx*2, by*2).Y > 128 ||
+				edges.GrayAt(bx*2+1, by*2).Y > 128 ||
+				edges.GrayAt(bx*2, by*2+1).Y > 128 ||
+				edges.GrayAt(bx*2+1, by*2+1).Y > 128
 
 			// Find the best representation for this block
 			bestRune, fgColor, bgColor := FindBestBlockRepresentation(
@@ -322,8 +323,8 @@ func getQuadrantsForRune(char rune) Quadrants {
 // using the Floyd-Steinberg error diffusion algorithm. The function takes
 // an image, the y and x coordinates of the pixel, the error to distribute,
 // and a boolean Value indicating whether the pixel is an edge pixel.
-func distributeError(img gocv.Mat, y, x int, error RGBError, isEdge bool) {
-	height, width := img.Rows(), img.Cols()
+func distributeError(img *imageutil.RGBAImage, y, x int, error RGBError, isEdge bool) {
+	height, width := img.Height(), img.Width()
 	errorScale := 1.0
 	if isEdge {
 		errorScale = 0.5 // Reduce error diffusion for edge pixels
@@ -331,16 +332,14 @@ func distributeError(img gocv.Mat, y, x int, error RGBError, isEdge bool) {
 
 	diffuseError := func(y, x int, factor float64) {
 		if y >= 0 && y < height && x >= 0 && x < width {
-			pixel := rgbFromVecb(img.GetVecbAt(y, x))
+			pixel := img.GetRGB(x, y) // Note: imageutil uses x,y ordering
 			newR := uint8(math.Max(0, math.Min(255,
 				float64(pixel.R)+float64(error.R)*factor*errorScale)))
 			newG := uint8(math.Max(0, math.Min(255,
 				float64(pixel.G)+float64(error.G)*factor*errorScale)))
 			newB := uint8(math.Max(0, math.Min(255,
 				float64(pixel.B)+float64(error.B)*factor*errorScale)))
-			img.SetUCharAt(y, x*3+2, newR)
-			img.SetUCharAt(y, x*3+1, newG)
-			img.SetUCharAt(y, x*3, newB)
+			img.SetRGB(x, y, imageutil.RGB{R: newR, G: newG, B: newB})
 		}
 	}
 
@@ -353,26 +352,21 @@ func distributeError(img gocv.Mat, y, x int, error RGBError, isEdge bool) {
 // ImageToANSI converts an image to ANSI art. The function takes the path to
 // an image file as a string and returns the image as an ANSI string.
 func ImageToANSI(imagePath string) string {
-	img := gocv.IMRead(imagePath, gocv.IMReadAnyColor)
-	if img.Empty() {
-		return fmt.Sprintf("Could not read image from %s", imagePath)
+	img, err := imageutil.LoadImage(imagePath)
+	if err != nil {
+		return fmt.Sprintf("Could not read image from %s: %v", imagePath, err)
 	}
-	defer func(img *gocv.Mat) {
-		err := img.Close()
-		if err != nil {
-			fmt.Println("Error closing image")
-		}
-	}(&img)
 
-	aspectRatio := float64(img.Cols()) / float64(img.Rows())
+	aspectRatio := float64(img.Width()) / float64(img.Height())
 	width := TargetWidth
 	height := int(float64(width) / aspectRatio / ScaleFactor)
 
 	for {
-		resized, edges := prepareForANSI(img, width, height)
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
 		ditheredImg := BrownDitherForBlocks(resized, edges)
+
 		// Write the scaled image to a file for debugging
-		if err := saveToPNG(resized, "resized.png"); err != nil {
+		if err := imageutil.SavePNG(resized.RGBA, "resized.png"); err != nil {
 			fmt.Println(err)
 		}
 
@@ -387,9 +381,8 @@ func ImageToANSI(imagePath string) string {
 		}
 
 		// Write the edges image to a file for debugging
-		if err := saveToPNG(edges, "edges.png"); err != nil {
+		if err := imageutil.SaveGrayImage(edges, "edges.png"); err != nil {
 			fmt.Println(err)
-
 		}
 
 		ansiImage := RenderToAnsi(ditheredImg)

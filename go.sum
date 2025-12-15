@@ -1,2 +1,2 @@
-gocv.io/x/gocv v0.37.0 h1:sISHvnApErjoJodz1Dxb8UAkFdITOB3vXGslbVu6Knk=
-gocv.io/x/gocv v0.37.0/go.mod h1:lmS802zoQmnNvXETpmGriBqWrENPei2GxYx5KUxJsMA=
+golang.org/x/image v0.34.0 h1:33gCkyw9hmwbZJeZkct8XyR11yH889EQt/QH4VmXMn8=
+golang.org/x/image v0.34.0/go.mod h1:2RNFBZRB+vnwwFil8GkMdRvrJOFd1AzdZI6vOY+eJVU=
