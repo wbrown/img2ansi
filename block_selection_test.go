@@ -59,7 +59,7 @@ func TestBlockSelection(t *testing.T) {
 	}
 
 	for _, test := range testBlocks {
-		bestRune, fgColor, bgColor := findBestBlockRepresentation(test.block, false)
+		bestRune, fgColor, bgColor := FindBestBlockRepresentation(test.block, false)
 		fmt.Printf("\n%s:\n", test.name)
 		fmt.Printf("  Input: ")
 		for _, c := range test.block {
@@ -99,7 +99,7 @@ func TestBlockSelection(t *testing.T) {
 					{uint8((r + 48) % 256), uint8((g + 48) % 256), uint8((b + 48) % 256)},
 				}
 				
-				_, fgColor, bgColor := findBestBlockRepresentation(block, false)
+				_, fgColor, bgColor := FindBestBlockRepresentation(block, false)
 				colorCounts[fgColor]++
 				colorCounts[bgColor]++
 			}

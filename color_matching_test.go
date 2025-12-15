@@ -64,7 +64,7 @@ func TestColorMatching(t *testing.T) {
 	}
 	
 	CurrentColorDistanceMethod = MethodLAB
-	bestRune, fgColor, bgColor := findBestBlockRepresentation(brownBlock, false)
+	bestRune, fgColor, bgColor := FindBestBlockRepresentation(brownBlock, false)
 	fmt.Printf("  Brown block -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
 		bestRune, fgColor.R, fgColor.G, fgColor.B, bgColor.R, bgColor.G, bgColor.B)
 
@@ -76,7 +76,7 @@ func TestColorMatching(t *testing.T) {
 		{0, 0, 0},
 	}
 	
-	bestRune, fgColor, bgColor = findBestBlockRepresentation(contrastBlock, false)
+	bestRune, fgColor, bgColor = FindBestBlockRepresentation(contrastBlock, false)
 	fmt.Printf("  Contrast block -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
 		bestRune, fgColor.R, fgColor.G, fgColor.B, bgColor.R, bgColor.G, bgColor.B)
 
@@ -103,7 +103,7 @@ func TestColorMatching(t *testing.T) {
 	for i, color := range mandrillColors {
 		// Test as a uniform block
 		block := [4]RGB{color, color, color, color}
-		bestRune, fgColor, bgColor := findBestBlockRepresentation(block, false)
+		bestRune, fgColor, bgColor := FindBestBlockRepresentation(block, false)
 		fmt.Printf("  Color %d RGB(%d,%d,%d) -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
 			i, color.R, color.G, color.B, bestRune, 
 			fgColor.R, fgColor.G, fgColor.B,

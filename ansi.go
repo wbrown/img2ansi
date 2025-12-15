@@ -155,15 +155,18 @@ func RenderToAnsi(blocks [][]BlockRune) string {
 
 	for _, row := range blocks {
 		for _, block := range row {
-			fgCode, _ := fgAnsi.Get(block.FG.toUint32())
-			bgCode, _ := bgAnsi.Get(block.BG.toUint32())
-
-			sb.WriteString(fmt.Sprintf("\x1b[%s;%sm", fgCode, bgCode))
-			sb.WriteRune(block.Rune)
+			sb.WriteString(RenderBlockRune(block))
 		}
 		// Reset colors at the end of each line and add a newline
 		sb.WriteString("\x1b[0m\n")
 	}
 
 	return sb.String()
+}
+
+// RenderBlockRune renders a single BlockRune to an ANSI escape sequence string.
+func RenderBlockRune(block BlockRune) string {
+	fgCode, _ := fgAnsi.Get(block.FG.toUint32())
+	bgCode, _ := bgAnsi.Get(block.BG.toUint32())
+	return fmt.Sprintf("\x1b[%s;%sm%c", fgCode, bgCode, block.Rune)
 }

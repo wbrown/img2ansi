@@ -2,10 +2,11 @@ package img2ansi
 
 import (
 	"fmt"
-	"gocv.io/x/gocv"
 	_ "image/png"
 	"math"
 	"time"
+
+	"gocv.io/x/gocv"
 )
 
 const (
@@ -143,7 +144,7 @@ func BrownDitherForBlocks(
 				edges.GetUCharAt(by*2+1, bx*2+1) > 128
 
 			// Find the best representation for this block
-			bestRune, fgColor, bgColor := findBestBlockRepresentation(
+			bestRune, fgColor, bgColor := FindBestBlockRepresentation(
 				block, isEdge)
 
 			// Store the result
@@ -175,12 +176,12 @@ func BrownDitherForBlocks(
 	return result
 }
 
-// findBestBlockRepresentation finds the best rune representation for a 2x2
+// FindBestBlockRepresentation finds the best rune representation for a 2x2
 // block of colors. The function takes the block of colors, a boolean Value
 // indicating whether the block is an edge block, and returns the best rune
 // representation, the foreground color, and the background color for the
 // block.
-func findBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
+func FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 	// Map each color in the block to its closest palette color
 	var fgPaletteBlock [4]RGB
 	var bgPaletteBlock [4]RGB

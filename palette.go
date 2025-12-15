@@ -384,3 +384,61 @@ func LoadPaletteJSON(path string) (*ComputedTables, *ComputedTables, error) {
 
 	return &fgComputedTable, &bgComputedTable, nil
 }
+
+// LookupClosestColor finds the closest palette color for an RGB value.
+// Returns the closest palette RGB and its ANSI 256 color number.
+// LoadPalette must be called first.
+func LookupClosestColor(r, g, b uint8) (closestRGB RGB, ansiCode int, ok bool) {
+	if fgClosestColor == nil {
+		return RGB{}, 0, false
+	}
+	idx := uint32(r)<<16 | uint32(g)<<8 | uint32(b)
+	closest := (*fgClosestColor)[idx]
+	codeStr, exists := fgAnsi.Get(closest.toUint32())
+	if !exists {
+		return closest, 0, false
+	}
+	// Parse "38;5;N" or "48;5;N" to extract N
+	code := ParseANSICodeString(codeStr.(string))
+	return closest, code, true
+}
+
+// ParseANSICodeString extracts the color number from an ANSI code string.
+// E.g., "38;5;17" -> 17, "48;5;17" -> 17
+func ParseANSICodeString(code string) int {
+	var n int
+	if _, err := fmt.Sscanf(code, "38;5;%d", &n); err == nil {
+		return n
+	}
+	if _, err := fmt.Sscanf(code, "48;5;%d", &n); err == nil {
+		return n
+	}
+	return 0
+}
+
+// GetPaletteColors returns all colors in the loaded foreground palette.
+// LoadPalette must be called first.
+func GetPaletteColors() []RGB {
+	if fgColors == nil {
+		return nil
+	}
+	return fgColors
+}
+
+// GetPaletteSize returns the number of colors in the loaded palette.
+func GetPaletteSize() int {
+	if fgColors == nil {
+		return 0
+	}
+	return len(fgColors)
+}
+
+// GetANSICode returns the ANSI 256 color number for a palette RGB color.
+// Returns 0 if the color is not in the palette.
+func GetANSICode(rgb RGB) int {
+	codeStr, exists := fgAnsi.Get(rgb.toUint32())
+	if !exists {
+		return 0
+	}
+	return ParseANSICodeString(codeStr.(string))
+}
