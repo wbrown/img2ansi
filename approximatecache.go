@@ -47,11 +47,14 @@ func (r *Renderer) addCacheEntry(
 	isEdge bool,
 ) {
 	r.lookupMisses++
+	// Calculate and store the original error for exact-match detection
+	quad := getQuadrantsForRune(rune)
+	originalError := r.calculateBlockError(block, quad, fg, bg, isEdge)
 	newMatch := Match{
 		Rune:  rune,
 		FG:    fg,
 		BG:    bg,
-		Error: 0, // Error will be calculated when retrieved
+		Error: originalError,
 	}
 	if entry, exists := r.lookupTable[k]; exists {
 		// Create a new slice with the appended match
@@ -89,7 +92,9 @@ func (r *Renderer) getCacheEntry(
 			quad := getQuadrantsForRune(match.Rune)
 			error := r.calculateBlockError(block, quad, match.FG, match.BG, isEdge)
 
-			if error < lowestError && error < baseThreshold {
+			// Accept if: (1) error below threshold, OR (2) exact match (same error as cached)
+			isExactMatch := math.Abs(error-match.Error) < 0.001
+			if error < lowestError && (error < baseThreshold || isExactMatch) {
 				lowestError = error
 				bestMatch = match
 			}

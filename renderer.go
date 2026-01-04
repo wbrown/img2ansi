@@ -312,6 +312,27 @@ func (r *Renderer) CacheStats() (hits, misses int, hitRate float64) {
 	return r.lookupHits, r.lookupMisses, float64(r.lookupHits) / float64(total)
 }
 
+// CacheKeyStats returns statistics about cache key distribution.
+// Returns: uniqueKeys (number of distinct cache keys), sharedKeys (keys with multiple blocks),
+// totalBlocks (total blocks cached), avgError (average error across all cached blocks).
+func (r *Renderer) CacheKeyStats() (uniqueKeys, sharedKeys, totalBlocks int, avgError float64) {
+	var errorSum float64
+	for _, entry := range r.lookupTable {
+		uniqueKeys++
+		totalBlocks += len(entry.Matches)
+		if len(entry.Matches) > 1 {
+			sharedKeys++
+		}
+		for _, match := range entry.Matches {
+			errorSum += match.Error
+		}
+	}
+	if totalBlocks > 0 {
+		avgError = errorSum / float64(totalBlocks)
+	}
+	return
+}
+
 // ResetStats resets all statistics counters.
 func (r *Renderer) ResetStats() {
 	r.lookupHits = 0

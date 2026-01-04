@@ -61,7 +61,7 @@ func main() {
 	kdSearchDepth := flag.Int("kdsearch", 50,
 		"Number of nearest neighbors to search in KD-tree, 0 to disable")
 	threshold := flag.Float64("cache_threshold", 40.0,
-		"Threshold for block cache")
+		"Max error for approximate cache matches (higher=faster, lower=better quality)")
 	colorMethod := flag.String("colormethod",
 		"RGB", "Color distance method: RGB, LAB, or Redmean")
 	//printTable := flag.Bool("table", false,
@@ -141,10 +141,13 @@ func main() {
 	}
 
 	hits, misses, hitRate := r.CacheStats()
+	uniqueKeys, sharedKeys, totalBlocks, avgError := r.CacheKeyStats()
 	fmt.Printf("Computation time: %v\n", endComputation.Sub(endInit))
 	fmt.Printf("BestBlock calculation time: %v\n", r.GetBestBlockTime())
 	fmt.Printf("Total string length: %d\n", len(ansiArt))
 	fmt.Printf("Compressed string length: %d\n", len(compressedArt))
 	fmt.Printf("Block Cache: %d hits, %d misses (%.1f%% hit rate)\n",
 		hits, misses, hitRate*100)
+	fmt.Printf("Cache Keys: %d unique, %d shared (%d blocks, avg error %.1f)\n",
+		uniqueKeys, sharedKeys, totalBlocks, avgError)
 }

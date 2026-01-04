@@ -4,6 +4,9 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/wbrown/img2ansi/imageutil"
 )
 
 func TestRendererPaletteCaching(t *testing.T) {
@@ -381,4 +384,121 @@ func TestRendererCustomColorMethod(t *testing.T) {
 	if hits+misses == 0 {
 		t.Error("Expected cache activity after FindBestBlockRepresentation")
 	}
+}
+
+func TestRendererCacheErrorDistribution(t *testing.T) {
+	// Load the mandrill test image
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		t.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	r := NewRenderer(
+		WithColorMethod(RGBMethod{}),
+		WithPalette("ansi256"),
+		WithKdSearch(50),
+		WithCacheThreshold(40.0),
+	)
+
+	width, height := 80, 40
+	resized, edges := imageutil.PrepareForANSI(img, width, height)
+	_ = r.BrownDitherForBlocks(resized, edges)
+
+	// Analyze cache entries
+	var totalEntries, totalMatches int
+	var errorSum float64
+	errorBuckets := make(map[int]int) // bucket by error/10
+
+	for _, entry := range r.lookupTable {
+		totalEntries++
+		for _, match := range entry.Matches {
+			totalMatches++
+			errorSum += match.Error
+			bucket := int(match.Error / 10)
+			errorBuckets[bucket]++
+		}
+	}
+
+	t.Logf("Cache entries: %d, Total matches: %d", totalEntries, totalMatches)
+	t.Logf("Average error: %.2f", errorSum/float64(totalMatches))
+	t.Logf("Error distribution (bucket size=10):")
+	for i := 0; i <= 20; i++ {
+		if count := errorBuckets[i]; count > 0 {
+			t.Logf("  %3d-%3d: %d blocks", i*10, (i+1)*10-1, count)
+		}
+	}
+
+	hits, misses, rate := r.CacheStats()
+	t.Logf("Within-image cache: hits=%d, misses=%d, rate=%.2f%%", hits, misses, rate*100)
+
+	// Count how many keys have multiple matches (potential for approximate hits)
+	keysWithMultiple := 0
+	potentialApproxHits := 0
+	for _, entry := range r.lookupTable {
+		if len(entry.Matches) > 1 {
+			keysWithMultiple++
+			potentialApproxHits += len(entry.Matches) - 1
+		}
+	}
+	t.Logf("Keys with multiple blocks: %d, potential approx hits: %d", keysWithMultiple, potentialApproxHits)
+}
+
+func TestRendererCachingWithMandrill(t *testing.T) {
+	// Load the mandrill test image
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		t.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	// Use default ansify settings: width=80, kdsearch=50, threshold=40, RGB method
+	r := NewRenderer(
+		WithColorMethod(RGBMethod{}),
+		WithPalette("ansi256"),
+		WithKdSearch(50),
+		WithCacheThreshold(40.0),
+	)
+
+	width, height := 80, 40
+
+	// First render - cache is cold
+	resized1, edges1 := imageutil.PrepareForANSI(img, width, height)
+	start1 := time.Now()
+	blocks1 := r.BrownDitherForBlocks(resized1, edges1)
+	duration1 := time.Since(start1)
+	ansi1 := r.RenderToAnsi(blocks1)
+
+	hits1, misses1, rate1 := r.CacheStats()
+	t.Logf("First render:  %v, hits=%d, misses=%d, rate=%.2f%%",
+		duration1, hits1, misses1, rate1*100)
+
+	// Second render - cache should be warm (don't reset stats to see cumulative)
+	resized2, edges2 := imageutil.PrepareForANSI(img, width, height)
+	start2 := time.Now()
+	blocks2 := r.BrownDitherForBlocks(resized2, edges2)
+	duration2 := time.Since(start2)
+	ansi2 := r.RenderToAnsi(blocks2)
+
+	hits2, misses2, rate2 := r.CacheStats()
+	// Calculate second render stats (cumulative - first)
+	secondHits := hits2 - hits1
+	secondMisses := misses2 - misses1
+	t.Logf("Second render: %v, hits=%d, misses=%d, cumulative_rate=%.2f%%",
+		duration2, secondHits, secondMisses, rate2*100)
+
+	// Second render should have more hits than misses
+	if secondHits == 0 {
+		t.Errorf("Expected cache hits on second render, got hits=%d misses=%d", secondHits, secondMisses)
+	}
+
+	// Second render should be faster due to cache hits
+	if duration2 >= duration1 {
+		t.Errorf("Expected second render to be faster: first=%v, second=%v", duration1, duration2)
+	}
+
+	// Verify output is identical (deterministic)
+	if ansi1 != ansi2 {
+		t.Error("Expected identical output from both renders")
+	}
+
+	t.Logf("Speedup: %.2fx", float64(duration1)/float64(duration2))
 }
