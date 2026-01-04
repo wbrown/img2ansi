@@ -6,11 +6,7 @@ import (
 )
 
 func TestColorMatching(t *testing.T) {
-	// Load the ansi16 palette
-	_, _, err := LoadPalette("colordata/ansi16.json")
-	if err != nil {
-		t.Fatalf("Failed to load palette: %v", err)
-	}
+	t.Parallel()
 
 	// Test specific colors that should map to browns, oranges, etc
 	testCases := []struct {
@@ -28,26 +24,27 @@ func TestColorMatching(t *testing.T) {
 	}
 
 	fmt.Println("Testing color matching with LAB method:")
-	CurrentColorDistanceMethod = MethodLAB
+	rLAB := NewRenderer(
+		WithColorMethod(LABMethod{}),
+		WithPalette("colordata/ansi16.json"),
+	)
 	for _, tc := range testCases {
 		// Find closest color in palette
-		closest := (*fgClosestColor)[tc.input.toUint32()]
+		closest := (*rLAB.fgClosestColor)[tc.input.toUint32()]
 		fmt.Printf("  %s RGB(%d,%d,%d) -> RGB(%d,%d,%d)\n",
 			tc.name, tc.input.R, tc.input.G, tc.input.B,
 			closest.R, closest.G, closest.B)
 	}
 
 	fmt.Println("\nTesting color matching with RGB method:")
-	CurrentColorDistanceMethod = MethodRGB
-	// Reload palette for RGB method
-	_, _, err = LoadPalette("colordata/ansi16.json")
-	if err != nil {
-		t.Fatalf("Failed to reload palette: %v", err)
-	}
-	
+	rRGB := NewRenderer(
+		WithColorMethod(RGBMethod{}),
+		WithPalette("colordata/ansi16.json"),
+	)
+
 	for _, tc := range testCases {
 		// Find closest color in palette
-		closest := (*fgClosestColor)[tc.input.toUint32()]
+		closest := (*rRGB.fgClosestColor)[tc.input.toUint32()]
 		fmt.Printf("  %s RGB(%d,%d,%d) -> RGB(%d,%d,%d)\n",
 			tc.name, tc.input.R, tc.input.G, tc.input.B,
 			closest.R, closest.G, closest.B)
@@ -62,9 +59,8 @@ func TestColorMatching(t *testing.T) {
 		{190, 130, 70},
 		{160, 100, 40},
 	}
-	
-	CurrentColorDistanceMethod = MethodLAB
-	bestRune, fgColor, bgColor := FindBestBlockRepresentation(brownBlock, false)
+
+	bestRune, fgColor, bgColor := rLAB.FindBestBlockRepresentation(brownBlock, false)
 	fmt.Printf("  Brown block -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
 		bestRune, fgColor.R, fgColor.G, fgColor.B, bgColor.R, bgColor.G, bgColor.B)
 
@@ -75,14 +71,14 @@ func TestColorMatching(t *testing.T) {
 		{255, 255, 255},
 		{0, 0, 0},
 	}
-	
-	bestRune, fgColor, bgColor = FindBestBlockRepresentation(contrastBlock, false)
+
+	bestRune, fgColor, bgColor = rLAB.FindBestBlockRepresentation(contrastBlock, false)
 	fmt.Printf("  Contrast block -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
 		bestRune, fgColor.R, fgColor.G, fgColor.B, bgColor.R, bgColor.G, bgColor.B)
 
 	// Print the actual palette colors
 	fmt.Println("\nANSI 16 Palette colors:")
-	fgAnsi.Iterate(func(key, value interface{}) {
+	rLAB.fgAnsi.Iterate(func(key, value interface{}) {
 		color := rgbFromUint32(key.(uint32))
 		code := value.(string)
 		fmt.Printf("  Code %s: RGB(%d,%d,%d) = #%02X%02X%02X\n",
@@ -103,9 +99,9 @@ func TestColorMatching(t *testing.T) {
 	for i, color := range mandrillColors {
 		// Test as a uniform block
 		block := [4]RGB{color, color, color, color}
-		bestRune, fgColor, bgColor := FindBestBlockRepresentation(block, false)
+		bestRune, fgColor, bgColor := rLAB.FindBestBlockRepresentation(block, false)
 		fmt.Printf("  Color %d RGB(%d,%d,%d) -> Rune: %c, FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
-			i, color.R, color.G, color.B, bestRune, 
+			i, color.R, color.G, color.B, bestRune,
 			fgColor.R, fgColor.G, fgColor.B,
 			bgColor.R, bgColor.G, bgColor.B)
 	}

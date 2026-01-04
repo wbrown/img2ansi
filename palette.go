@@ -1,10 +1,7 @@
 package img2ansi
 
 import (
-	"bytes"
-	"compress/gzip"
 	"embed"
-	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -29,10 +26,38 @@ type ByAnsiCode AnsiData
 func (a ByAnsiCode) Len() int      { return len(a) }
 func (a ByAnsiCode) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a ByAnsiCode) Less(i, j int) bool {
-	// Extract numeric part from ANSI code strings
-	numI, _ := strconv.Atoi(a[i].Value)
-	numJ, _ := strconv.Atoi(a[j].Value)
-	return numI < numJ
+	return parseAnsiCodeForSort(a[i].Value) < parseAnsiCodeForSort(a[j].Value)
+}
+
+// parseAnsiCodeForSort extracts a sortable numeric value from an ANSI code string.
+// For basic codes like "30" or "90", returns the code directly.
+// For 256-color codes like "38;5;123", returns 1000+N to sort after basic codes.
+// For 24-bit codes like "38;2;r;g;b", returns 2000000+RGB to sort after 256-color.
+func parseAnsiCodeForSort(code string) int {
+	// Handle 256-color codes: "38;5;N" or "48;5;N"
+	if strings.HasPrefix(code, "38;5;") || strings.HasPrefix(code, "48;5;") {
+		parts := strings.Split(code, ";")
+		if len(parts) >= 3 {
+			if n, err := strconv.Atoi(parts[2]); err == nil {
+				return 1000 + n // Sort after basic codes (0-999)
+			}
+		}
+	}
+	// Handle 24-bit color codes: "38;2;r;g;b" or "48;2;r;g;b"
+	if strings.HasPrefix(code, "38;2;") || strings.HasPrefix(code, "48;2;") {
+		parts := strings.Split(code, ";")
+		if len(parts) >= 5 {
+			r, _ := strconv.Atoi(parts[2])
+			g, _ := strconv.Atoi(parts[3])
+			b, _ := strconv.Atoi(parts[4])
+			return 2000000 + r*65536 + g*256 + b // Sort after 256-color codes
+		}
+	}
+	// Basic codes: just parse the number
+	if n, err := strconv.Atoi(code); err == nil {
+		return n
+	}
+	return 0
 }
 
 // ReadAnsiDataFromJSON reads ANSI color data from a JSON file and returns
@@ -110,7 +135,12 @@ type ComputedTables struct {
 // The function takes an OrderedMap of color codes and RGB colors as input,
 // and returns a ComputedTables struct containing the color array, closest
 // color array, color table, and KD-tree.
-func ComputeTables(colorData AnsiData) ComputedTables {
+//
+// Note: This function is slow (~30-40 seconds) because it precomputes
+// the nearest palette color for all 16.7 million possible RGB values.
+// For custom ColorDistanceMethod implementations, use ComputeTablesForKdSearch
+// instead, which skips this expensive computation.
+func ComputeTables(colorData AnsiData, method ColorDistanceMethod) ComputedTables {
 	closestColorArr := make([]RGB, 256*256*256)
 	colorTable := make(map[RGB]uint32)
 	colorArr := make([]RGB, len(colorData))
@@ -126,7 +156,7 @@ func ComputeTables(colorData AnsiData) ComputedTables {
 			for b := 0; b < 256; b++ {
 				rgb := RGB{uint8(r), uint8(g), uint8(b)}
 				closest, _ := kdTree.nearestNeighbor(
-					rgb, kdTree.Color, math.MaxFloat64, 0)
+					rgb, kdTree.Color, math.MaxFloat64, 0, method)
 				closestColorArr[r<<16|g<<8|b] = closest
 			}
 		}
@@ -134,6 +164,34 @@ func ComputeTables(colorData AnsiData) ComputedTables {
 	return ComputedTables{
 		ColorArr:        &colorArr,
 		ClosestColorArr: &closestColorArr,
+		ColorTable:      &colorTable,
+		KdTree:          kdTree,
+	}
+}
+
+// ComputeTablesForKdSearch computes only the structures needed for KD-tree
+// based color matching. This is much faster than ComputeTables because it
+// skips the expensive 16.7 million entry lookup table computation.
+//
+// Use this for custom ColorDistanceMethod implementations where you don't
+// have precomputed .palette files. The Renderer will automatically use
+// KD-tree search at runtime instead of table lookups.
+//
+// Returns ComputedTables with ClosestColorArr set to nil. The Renderer
+// detects this and uses runtime KD-tree lookups instead.
+func ComputeTablesForKdSearch(colorData AnsiData) ComputedTables {
+	colorTable := make(map[RGB]uint32)
+	colorArr := make([]RGB, len(colorData))
+	for idx, entry := range colorData {
+		colorArr[idx] = rgbFromUint32(entry.Key)
+		colorTable[rgbFromUint32(entry.Key)] = uint32(idx)
+	}
+	maxDepth := int(math.Log2(float64(len(colorArr))) + 1)
+	kdTree := buildKDTree(colorArr, 0, maxDepth)
+
+	return ComputedTables{
+		ColorArr:        &colorArr,
+		ClosestColorArr: nil, // Not computed - use KD-tree search at runtime
 		ColorTable:      &colorTable,
 		KdTree:          kdTree,
 	}
@@ -149,7 +207,7 @@ type CompactTablePair struct {
 	Bg CompactComputedTables
 }
 
-type ColorMethodCompactTables map[ColorDistanceMethod]CompactTablePair
+type ColorMethodCompactTables map[string]CompactTablePair
 
 type CompactComputedTables struct {
 	ColorArr        []RGB
@@ -159,8 +217,8 @@ type CompactComputedTables struct {
 	KDTreeData      []byte // Serialized KD-tree data
 }
 
-func CompactComputeTables(colorData AnsiData) CompactComputedTables {
-	tables := ComputeTables(colorData)
+func CompactComputeTables(colorData AnsiData, method ColorDistanceMethod) CompactComputedTables {
+	tables := ComputeTables(colorData, method)
 	colorTable := make([]ColorTableEntry, len(colorData))
 	closestColorArr := make([]uint8, 256*256*256)
 
@@ -195,20 +253,18 @@ func findColorIndex(colorTable []ColorTableEntry, color RGB) uint32 {
 	return 0 // or handle error
 }
 
-func LoadPaletteAsCompactTables(path string) (CompactComputedTables,
+func LoadPaletteAsCompactTables(path string, method ColorDistanceMethod) (CompactComputedTables,
 	CompactComputedTables, error) {
 	fgData, bgData, err := ReadAnsiDataFromJSON(path)
 	if err != nil {
 		return CompactComputedTables{}, CompactComputedTables{}, err
 	}
-	fgAnsi = fgData.ToOrderedMap()
-	fgComputedTable := CompactComputeTables(fgData)
+	fgComputedTable := CompactComputeTables(fgData, method)
 	fgComputedTable.AnsiData = fgData
 
 	var bgComputedTable CompactComputedTables
 	if !PaletteSame(fgData, bgData) {
-		bgAnsi = bgData.ToOrderedMap()
-		bgComputedTable = CompactComputeTables(bgData)
+		bgComputedTable = CompactComputeTables(bgData, method)
 	} else {
 		bgComputedTable = CompactComputedTables{
 			AnsiData: bgData,
@@ -264,181 +320,8 @@ func (cct CompactComputedTables) Restore() ComputedTables {
 	}
 }
 
-func LoadPalette(path string) (*ComputedTables, *ComputedTables, error) {
-	if strings.HasSuffix(path, ".palette") {
-		return LoadPaletteBinary(path)
-	} else if strings.HasSuffix(path, ".json") {
-		return LoadPaletteJSON(path)
-	} else {
-		return LoadPaletteBinary(path)
-	}
-}
 
-func LoadPaletteBinary(path string) (fg, bg *ComputedTables, err error) {
-	// First, try the VFS.
-	template := "colordata/%s.palette"
-	data, vfsErr := f.ReadFile(fmt.Sprintf(template, path))
-	if vfsErr != nil {
-		var fsErr error
-		data, fsErr = ioutil.ReadFile(path)
-		if fsErr != nil {
-			return nil, nil, fmt.Errorf("failed to read file: %v", fsErr)
-		}
-	}
-	gzr, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create gzip reader: %v", err)
-	}
-	defer gzr.Close()
-
-	var cmct ColorMethodCompactTables
-	dec := gob.NewDecoder(gzr)
-	if err := dec.Decode(&cmct); err != nil {
-		return nil, nil, fmt.Errorf("failed to decode palette data: %v", err)
-	}
-	cct := cmct[CurrentColorDistanceMethod]
-
-	fgTables := cct.Fg.Restore()
-	fgAnsi = fgTables.AnsiData.ToOrderedMap()
-	bgTables := cct.Bg.Restore()
-	bgAnsi = bgTables.AnsiData.ToOrderedMap()
-
-	fgClosestColor = fgTables.ClosestColorArr
-	fgColorTable = *fgTables.ColorTable
-	fgTree = fgTables.KdTree
-	fgColors = *fgTables.ColorArr
-
-	bgAnsiData := bgTables.AnsiData
-	if len(*bgTables.ColorTable) == 0 {
-		bgTables = fgTables
-		bgTables.AnsiData = bgAnsiData
-		bgClosestColor = fgClosestColor
-		bgColorTable = fgColorTable
-		bgTree = fgTree
-		bgColors = fgColors
-	} else {
-		bgClosestColor = bgTables.ClosestColorArr
-		bgColorTable = *bgTables.ColorTable
-		bgTree = bgTables.KdTree
-		bgColors = *bgTables.ColorArr
-	}
-
-	fgAnsi = fgTables.AnsiData.ToOrderedMap()
-	bgAnsi = bgTables.AnsiData.ToOrderedMap()
-	lookupTable = make(map[Uint256]lookupEntry)
-	ComputeDistinctColors()
-
-	return &fgTables, &bgTables, nil
-}
-
-func ComputeDistinctColors() {
-	// Count the number of distinct colors
-	seen := make(map[RGB]bool)
-	fgAnsi.Iterate(
-		func(key, _ interface{}) {
-			seen[rgbFromUint32(key.(uint32))] = true
-		})
-	bgAnsi.Iterate(
-		func(key, _ interface{}) {
-			seen[rgbFromUint32(key.(uint32))] = true
-		})
-	DistinctColors = len(seen)
-}
-
-func LoadPaletteJSON(path string) (*ComputedTables, *ComputedTables, error) {
-	fgData, bgData, err := ReadAnsiDataFromJSON(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	fgAnsi = fgData.ToOrderedMap()
-	fgComputedTable := ComputeTables(fgData)
-	fgComputedTable.AnsiData = fgData
-	fgClosestColor = fgComputedTable.ClosestColorArr
-	fgColorTable = *fgComputedTable.ColorTable
-	fgTree = fgComputedTable.KdTree
-	fgColors = *fgComputedTable.ColorArr
-
-	var bgComputedTable ComputedTables
-	bgAnsi = bgData.ToOrderedMap()
-	if !PaletteSame(fgData, bgData) {
-		// If the foreground and background colors are different, load the
-		// background colors separately
-		bgComputedTable = ComputeTables(bgData)
-		bgClosestColor = bgComputedTable.ClosestColorArr
-		bgColorTable = *bgComputedTable.ColorTable
-		bgTree = bgComputedTable.KdTree
-		bgColors = *bgComputedTable.ColorArr
-	} else {
-		// If the foreground and background colors are the same, use the
-		// same tables for both
-		bgClosestColor = fgClosestColor
-		bgColorTable = fgColorTable
-		bgTree = fgTree
-		bgColors = fgColors
-		bgComputedTable = fgComputedTable
-	}
-	bgComputedTable.AnsiData = bgData
-
-	lookupTable = make(map[Uint256]lookupEntry)
-	ComputeDistinctColors()
-
-	return &fgComputedTable, &bgComputedTable, nil
-}
-
-// LookupClosestColor finds the closest palette color for an RGB value.
-// Returns the closest palette RGB and its ANSI 256 color number.
-// LoadPalette must be called first.
-func LookupClosestColor(r, g, b uint8) (closestRGB RGB, ansiCode int, ok bool) {
-	if fgClosestColor == nil {
-		return RGB{}, 0, false
-	}
-	idx := uint32(r)<<16 | uint32(g)<<8 | uint32(b)
-	closest := (*fgClosestColor)[idx]
-	codeStr, exists := fgAnsi.Get(closest.toUint32())
-	if !exists {
-		return closest, 0, false
-	}
-	// Parse "38;5;N" or "48;5;N" to extract N
-	code := ParseANSICodeString(codeStr.(string))
-	return closest, code, true
-}
-
-// ParseANSICodeString extracts the color number from an ANSI code string.
-// E.g., "38;5;17" -> 17, "48;5;17" -> 17
-func ParseANSICodeString(code string) int {
-	var n int
-	if _, err := fmt.Sscanf(code, "38;5;%d", &n); err == nil {
-		return n
-	}
-	if _, err := fmt.Sscanf(code, "48;5;%d", &n); err == nil {
-		return n
-	}
-	return 0
-}
-
-// GetPaletteColors returns all colors in the loaded foreground palette.
-// LoadPalette must be called first.
-func GetPaletteColors() []RGB {
-	if fgColors == nil {
-		return nil
-	}
-	return fgColors
-}
-
-// GetPaletteSize returns the number of colors in the loaded palette.
-func GetPaletteSize() int {
-	if fgColors == nil {
-		return 0
-	}
-	return len(fgColors)
-}
-
-// GetANSICode returns the ANSI 256 color number for a palette RGB color.
-// Returns 0 if the color is not in the palette.
-func GetANSICode(rgb RGB) int {
-	codeStr, exists := fgAnsi.Get(rgb.toUint32())
-	if !exists {
-		return 0
-	}
-	return ParseANSICodeString(codeStr.(string))
-}
+// Old global-based palette loading functions (LoadPalette, LoadPaletteBinary,
+// LoadPaletteJSON, ComputeDistinctColors, LookupClosestColor, GetPaletteColors,
+// GetPaletteSize, GetANSICode) removed in v1.0.0.
+// Use Renderer.LoadPalette() and Renderer methods instead.

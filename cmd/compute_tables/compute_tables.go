@@ -19,16 +19,22 @@ func main() {
 	}
 	path := os.Args[1]
 	data := make(img2ansi.ColorMethodCompactTables)
-	for idx, method := range img2ansi.ColorDistanceMethods {
-		currMethod := img2ansi.ColorDistanceMethod(idx)
-		fmt.Printf("Computing tables for %s\n", method)
-		img2ansi.CurrentColorDistanceMethod = currMethod
-		fg, bg, paletteErr := img2ansi.LoadPaletteAsCompactTables(path)
+
+	// Create all three color distance methods
+	methods := []img2ansi.ColorDistanceMethod{
+		img2ansi.RGBMethod{},
+		img2ansi.LABMethod{},
+		img2ansi.RedmeanMethod{},
+	}
+
+	for _, method := range methods {
+		fmt.Printf("Computing tables for %s\n", method.Name())
+		fg, bg, paletteErr := img2ansi.LoadPaletteAsCompactTables(path, method)
 		if paletteErr != nil {
 			fmt.Printf("Error loading palette: %v\n", paletteErr)
 			os.Exit(1)
 		}
-		data[currMethod] = img2ansi.CompactTablePair{Fg: fg, Bg: bg}
+		data[method.Name()] = img2ansi.CompactTablePair{Fg: fg, Bg: bg}
 	}
 
 	// Remove any extensions from path

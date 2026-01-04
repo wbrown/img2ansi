@@ -91,6 +91,32 @@ The algorithm is specifically tuned for human perception:
 
 ## Architecture Overview
 
+### Renderer API (v1.0+)
+
+The library uses a `Renderer` struct that encapsulates all state for thread-safe, reusable rendering:
+
+```go
+// Create once, reuse across renders (preserves cache)
+r := img2ansi.NewRenderer(
+    img2ansi.WithPalette("ansi256"),
+    img2ansi.WithColorMethod(img2ansi.RedmeanMethod{}),
+    img2ansi.WithKdSearch(50),
+)
+
+// Render with Renderer methods
+blocks := r.BrownDitherForBlocks(resized, edges)
+ansi := r.RenderToAnsi(blocks)
+compressed := r.CompressANSI(ansi)
+```
+
+Benefits over the old global API:
+- **Thread-safe**: Multiple renderers can run concurrently
+- **Cache persistence**: Block cache survives across different render sizes
+- **Clean configuration**: Functional options pattern
+- **Testable**: No global state to reset between tests
+
+See `MIGRATION.md` for migrating from the old global API.
+
 ### Core Algorithm Components
 
 1. **Image Processing** (`imageutil/` package):
@@ -100,16 +126,21 @@ The algorithm is specifically tuned for human perception:
    - Grayscale conversion (`convert.go`)
    - 2D convolution and sharpening (`convolve.go`)
    - Canny edge detection (`canny.go`)
-   - `PrepareForANSI()` - main preprocessing pipeline (`prepare.go`)
+   - Preprocessing pipeline (`prepare.go`):
+     - `PrepareForANSI()` - all-in-one with 4x edge detection quality
+     - `ResizeForANSI()` - resize only (for custom mid-pipeline processing)
+     - `DetectEdges()` - edge detection only
 
-2. **Block Processing Pipeline** (`img2ansi.go`):
+2. **Renderer and Block Processing** (`renderer.go`, `img2ansi.go`):
+   - `Renderer` struct holds palette, cache, and configuration
    - Processes images in 2x2 pixel blocks
    - Implements the Brown Dithering Algorithm with `FindBestBlockRepresentation`
    - Integrates edge detection for detail preservation
-   - Uses block caching for performance
+   - Block caching keyed by palette-mapped colors (size-independent)
 
 3. **Color Management** (`palette.go`, `rgb.go`):
-   - Supports multiple color spaces (RGB, LAB, Redmean)
+   - `ColorDistanceMethod` interface for extensible distance metrics
+   - Built-in methods: `RGBMethod{}`, `LABMethod{}`, `RedmeanMethod{}`
    - Manages embedded palettes (ANSI 16/256, JetBrains 32)
    - KD-tree search optimization for color matching
 
@@ -150,22 +181,49 @@ The `ApproximateCache` uses:
 Note: This is not fuzzy key matching but exact key lookup with multiple approximate values - a clever way to cache similar visual results.
 
 ### Color Distance Methods
-Three methods available via `-colormethod` flag:
-- **RGB**: Simple Euclidean distance (fastest)
-- **LAB**: CIE L*a*b* perceptually uniform space (best quality)
-- **Redmean**: Fast perceptual approximation (good compromise)
+
+The `ColorDistanceMethod` interface allows extensible distance metrics:
+
+```go
+type ColorDistanceMethod interface {
+    Distance(c1, c2 RGB) float64
+    Name() string
+}
+```
+
+Built-in implementations (available via `-colormethod` flag):
+- **`RGBMethod{}`**: Simple Euclidean distance (fastest)
+- **`LABMethod{}`**: CIE L*a*b* perceptually uniform space (best quality)
+- **`RedmeanMethod{}`**: Fast perceptual approximation (good compromise, default)
+
+**Custom implementations**: Can be passed to `WithColorMethod()` for specialized use cases.
+- Built-in methods use precomputed `.palette` files for instant table loading
+- Custom methods use **fast loading** with runtime KD-tree lookups:
+  - Instant palette loading (no 30-40 second delay)
+  - Uses KD-tree search at runtime instead of precomputed tables
+  - Slightly slower per-pixel lookups, but block caching mitigates this
+- For maximum performance with custom methods, generate a `.palette` file with `compute_tables`
 
 ### Pre-computation Tools
 
 **`compute_tables`** generates lookup tables for O(1) color matching:
 - **16.7 million entries**: Maps every possible RGB color (256³) to nearest palette color
-- **All distance methods**: Separate tables for RGB, LAB, and Redmean
+- **All distance methods**: Separate tables for RGB, LAB, and Redmean (keyed by method name)
 - **Index optimization**: Stores 1-byte palette indices instead of 3-byte RGB values
   - Reduces memory from ~50MB to ~16MB per table (3x reduction)
   - Better CPU cache performance
   - Two-step lookup: RGB → palette index → actual color
 - **Compression**: Gzip + gob encoding reduces file size
-- **Embedded in binary**: .palette files included via Go embed (~96MB total for all tables)
+- **Embedded in binary**: .palette files included via Go embed (~3MB total for all palettes)
+
+**Regenerating palette files** (required after changing `ColorDistanceMethod` or palette format):
+```bash
+cd cmd/compute_tables
+go build
+./compute_tables ../../colordata/ansi16.json
+./compute_tables ../../colordata/ansi256.json
+./compute_tables ../../colordata/jetbrains32.json
+```
 
 This preprocessing converts expensive per-pixel operations into simple array lookups:
 - Without: Calculate distance to 16-256 colors per pixel
@@ -196,13 +254,25 @@ The serialization system uses multiple compression layers:
 The sophisticated serialization reduces the ~300MB of raw color tables to ~96MB embedded in the binary, while maintaining fast load times.
 
 ### Image Processing Pipeline
-Implemented in `imageutil.PrepareForANSI()` (pure Go):
-1. Resize to 4x target size using Catmull-Rom interpolation
-2. Convert to grayscale and run Canny edge detection
+
+The pipeline can be used in two ways:
+
+**Standard Pipeline** (`PrepareForANSI` - highest quality):
+1. Resize to 4x target size using area interpolation
+2. Convert to grayscale and run Canny edge detection at 4x resolution
 3. Resize image and edges to 2x target size
 4. Apply mild sharpening (3x3 convolution kernel)
-5. Apply Brown Dithering with modified Floyd-Steinberg error diffusion
-6. Generate compressed ANSI sequences
+
+**Split Pipeline** (for custom mid-processing like overlaying rivers):
+```go
+resized := imageutil.ResizeForANSI(img, width, height)  // Resize + sharpen
+overlayRivers(resized, ...)                              // Custom modification
+edges := imageutil.DetectEdges(resized)                  // Edge detection after
+```
+
+**Then for both pipelines**:
+5. Apply Brown Dithering with modified Floyd-Steinberg error diffusion (`r.BrownDitherForBlocks`)
+6. Generate compressed ANSI sequences (`r.RenderToAnsi`, `r.CompressANSI`)
 
 ### ANSI Output Compression
 - **Run-length encoding**: Combines adjacent blocks with identical colors
@@ -254,15 +324,19 @@ Implemented in `imageutil.PrepareForANSI()` (pure Go):
 
 ## Key Files to Understand
 
-- `img2ansi.go`: Main algorithm implementation and block processing
+- `renderer.go`: **Renderer API** - encapsulates all state, palette loading, configuration
+- `img2ansi.go`: Brown Dithering Algorithm and block processing methods
 - `imageutil/`: Pure Go image processing package (replaces gocv/OpenCV)
-  - `prepare.go`: Main preprocessing pipeline (`PrepareForANSI`)
+  - `prepare.go`: Preprocessing pipeline (`PrepareForANSI`, `ResizeForANSI`, `DetectEdges`)
   - `canny.go`: Canny edge detection implementation
   - `resize.go`: Image resizing with various interpolation methods
   - `convolve.go`: 2D convolution and sharpening
-- `palette.go`: Color palette management and serialization
+- `palette.go`: Color palette types, serialization, and table computation
+- `rgb.go`: RGB/LAB color types and `ColorDistanceMethod` interface
+- `approximatecache.go`: Block caching system for performance
 - `cmd/ansify/ansify.go`: CLI interface and parameter handling
-- `cmd/compute_fonts/fonts.go`: Glyph matching system (in development)
+- `cmd/compute_tables/`: Regenerates embedded `.palette` binary files
+- `MIGRATION.md`: Guide for migrating from global API to Renderer API
 
 ## Active Research: Font-Agnostic Rendering
 

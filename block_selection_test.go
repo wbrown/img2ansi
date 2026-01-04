@@ -6,12 +6,13 @@ import (
 )
 
 func TestBlockSelection(t *testing.T) {
-	// Load the ansi16 palette with LAB
-	CurrentColorDistanceMethod = MethodLAB
-	_, _, err := LoadPalette("colordata/ansi16.json")
-	if err != nil {
-		t.Fatalf("Failed to load palette: %v", err)
-	}
+	t.Parallel()
+
+	// Create Renderer with LAB color method
+	r := NewRenderer(
+		WithColorMethod(LABMethod{}),
+		WithPalette("colordata/ansi16.json"),
+	)
 
 	fmt.Println("Testing mixed color blocks:")
 	
@@ -59,7 +60,7 @@ func TestBlockSelection(t *testing.T) {
 	}
 
 	for _, test := range testBlocks {
-		bestRune, fgColor, bgColor := FindBestBlockRepresentation(test.block, false)
+		bestRune, fgColor, bgColor := r.FindBestBlockRepresentation(test.block, false)
 		fmt.Printf("\n%s:\n", test.name)
 		fmt.Printf("  Input: ")
 		for _, c := range test.block {
@@ -67,16 +68,16 @@ func TestBlockSelection(t *testing.T) {
 		}
 		fmt.Printf("\n  Result: Rune '%c', FG: RGB(%d,%d,%d), BG: RGB(%d,%d,%d)\n",
 			bestRune, fgColor.R, fgColor.G, fgColor.B, bgColor.R, bgColor.G, bgColor.B)
-		
+
 		// Show which color codes these map to
 		fgCode := "?"
 		bgCode := "?"
-		fgAnsi.Iterate(func(key, value interface{}) {
+		r.fgAnsi.Iterate(func(key, value interface{}) {
 			if rgbFromUint32(key.(uint32)) == fgColor {
 				fgCode = value.(string)
 			}
 		})
-		bgAnsi.Iterate(func(key, value interface{}) {
+		r.bgAnsi.Iterate(func(key, value interface{}) {
 			if rgbFromUint32(key.(uint32)) == bgColor {
 				bgCode = value.(string)
 			}
@@ -89,17 +90,17 @@ func TestBlockSelection(t *testing.T) {
 	colorCounts := make(map[RGB]int)
 	
 	// Generate many random-ish blocks
-	for r := 0; r < 256; r += 32 {
-		for g := 0; g < 256; g += 32 {
-			for b := 0; b < 256; b += 32 {
+	for red := 0; red < 256; red += 32 {
+		for green := 0; green < 256; green += 32 {
+			for blue := 0; blue < 256; blue += 32 {
 				block := [4]RGB{
-					{uint8(r), uint8(g), uint8(b)},
-					{uint8((r + 16) % 256), uint8((g + 16) % 256), uint8((b + 16) % 256)},
-					{uint8((r + 32) % 256), uint8((g + 32) % 256), uint8((b + 32) % 256)},
-					{uint8((r + 48) % 256), uint8((g + 48) % 256), uint8((b + 48) % 256)},
+					{uint8(red), uint8(green), uint8(blue)},
+					{uint8((red + 16) % 256), uint8((green + 16) % 256), uint8((blue + 16) % 256)},
+					{uint8((red + 32) % 256), uint8((green + 32) % 256), uint8((blue + 32) % 256)},
+					{uint8((red + 48) % 256), uint8((green + 48) % 256), uint8((blue + 48) % 256)},
 				}
-				
-				_, fgColor, bgColor := FindBestBlockRepresentation(block, false)
+
+				_, fgColor, bgColor := r.FindBestBlockRepresentation(block, false)
 				colorCounts[fgColor]++
 				colorCounts[bgColor]++
 			}
@@ -110,7 +111,7 @@ func TestBlockSelection(t *testing.T) {
 	for color, count := range colorCounts {
 		if count > 0 {
 			code := "?"
-			fgAnsi.Iterate(func(key, value interface{}) {
+			r.fgAnsi.Iterate(func(key, value interface{}) {
 				if rgbFromUint32(key.(uint32)) == color {
 					code = value.(string)
 				}

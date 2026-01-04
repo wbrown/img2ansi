@@ -8,12 +8,13 @@ import (
 )
 
 func TestErrorDiffusionEffect(t *testing.T) {
-	// Load palette
-	CurrentColorDistanceMethod = MethodLAB
-	_, _, err := LoadPalette("colordata/ansi16.json")
-	if err != nil {
-		t.Fatalf("Failed to load palette: %v", err)
-	}
+	t.Parallel()
+
+	// Create Renderer with LAB color method
+	r := NewRenderer(
+		WithColorMethod(LABMethod{}),
+		WithPalette("colordata/ansi16.json"),
+	)
 
 	// Create a simple test image with brown/gray gradient
 	width, height := 8, 8
@@ -40,7 +41,7 @@ func TestErrorDiffusionEffect(t *testing.T) {
 
 	// Count colors in the result
 	colorCounts := make(map[RGB]int)
-	blocks := BrownDitherForBlocks(img, edges)
+	blocks := r.BrownDitherForBlocks(img, edges)
 
 	for _, row := range blocks {
 		for _, block := range row {
@@ -52,7 +53,7 @@ func TestErrorDiffusionEffect(t *testing.T) {
 	fmt.Println("\nColors used in gradient (block-based):")
 	for color, count := range colorCounts {
 		code := "?"
-		fgAnsi.Iterate(func(key, value interface{}) {
+		r.fgAnsi.Iterate(func(key, value interface{}) {
 			if rgbFromUint32(key.(uint32)) == color {
 				code = value.(string)
 			}
@@ -78,7 +79,7 @@ func TestErrorDiffusionEffect(t *testing.T) {
 	}
 
 	colorCounts2 := make(map[RGB]int)
-	blocks2 := BrownDitherForBlocks(img2, edges)
+	blocks2 := r.BrownDitherForBlocks(img2, edges)
 
 	for _, row := range blocks2 {
 		for _, block := range row {
@@ -91,7 +92,7 @@ func TestErrorDiffusionEffect(t *testing.T) {
 	for color, count := range colorCounts2 {
 		if count > 0 {
 			code := "?"
-			fgAnsi.Iterate(func(key, value interface{}) {
+			r.fgAnsi.Iterate(func(key, value interface{}) {
 				if rgbFromUint32(key.(uint32)) == color {
 					code = value.(string)
 				}

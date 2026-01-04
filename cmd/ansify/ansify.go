@@ -56,8 +56,8 @@ func main() {
 		"Scale factor for the output image")
 	maxChars := flag.Int("maxchars", 1048576,
 		"Maximum number of characters in the output")
-	quantization := flag.Int("quantization", 256,
-		"Quantization factor")
+	_ = flag.Int("quantization", 256,
+		"Quantization factor (deprecated in v1.0.0)")
 	kdSearchDepth := flag.Int("kdsearch", 50,
 		"Number of nearest neighbors to search in KD-tree, 0 to disable")
 	threshold := flag.Float64("cache_threshold", 40.0,
@@ -81,42 +81,38 @@ func main() {
 	//	return
 	//}
 
-	// Update global variables
-	img2ansi.TargetWidth = *targetWidth
-	img2ansi.MaxChars = *maxChars
-	img2ansi.Quantization = *quantization
-	img2ansi.ScaleFactor = *scaleFactor
-	img2ansi.KdSearch = *kdSearchDepth
-	img2ansi.CacheThreshold = *threshold
-
+	// Build Renderer options
 	*colorMethod = strings.ToLower(*colorMethod)
+	var method img2ansi.ColorDistanceMethod
 	switch *colorMethod {
 	case "rgb":
-		img2ansi.CurrentColorDistanceMethod = img2ansi.MethodRGB
+		method = img2ansi.RGBMethod{}
 	case "lab":
-		img2ansi.CurrentColorDistanceMethod = img2ansi.MethodLAB
+		method = img2ansi.LABMethod{}
 	case "redmean":
-		img2ansi.CurrentColorDistanceMethod = img2ansi.MethodRedmean
+		method = img2ansi.RedmeanMethod{}
 	default:
-		fmt.Println("Invalid color distance method, options are RGB," +
-			" LAB, or Redmean")
+		fmt.Println("Invalid color distance method, options are RGB, LAB, or Redmean")
 		os.Exit(1)
 	}
 
-	fg, bg, err := img2ansi.LoadPalette(*paletteFile)
-	if err != nil {
-		fmt.Printf("Error loading palette: %v\n", err)
-		os.Exit(1)
-	}
+	// Create Renderer
+	startInit := time.Now()
+	r := img2ansi.NewRenderer(
+		img2ansi.WithTargetWidth(*targetWidth),
+		img2ansi.WithScaleFactor(*scaleFactor),
+		img2ansi.WithMaxChars(*maxChars),
+		img2ansi.WithKdSearch(*kdSearchDepth),
+		img2ansi.WithCacheThreshold(*threshold),
+		img2ansi.WithColorMethod(method),
+		img2ansi.WithPalette(*paletteFile),
+	)
 	endInit := time.Now()
-	fmt.Printf(
-		"fg, bg, distinct colors: %d, %d, %d\n"+
-			"colormethod: %s\n"+
-			"distance table entries precomputed: %d\n",
-		len(*fg.ColorArr), len(*bg.ColorArr), img2ansi.DistinctColors,
-		*colorMethod, len(*fg.ClosestColorArr)+len(*bg.ClosestColorArr))
-	fmt.Printf("Initialization time: %v\n",
-		endInit.Sub(img2ansi.BeginInitTime))
+
+	fmt.Printf("Renderer initialized\n"+
+		"colormethod: %s\n"+
+		"Initialization time: %v\n",
+		*colorMethod, endInit.Sub(startInit))
 
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide the path to the image as an argument")
@@ -124,9 +120,12 @@ func main() {
 	}
 
 	// Generate ANSI art
-	ansiArt := img2ansi.ImageToANSI(*inputFile)
-	compressedArt := img2ansi.CompressANSI(ansiArt)
-	//compressedArt := ansiArt
+	ansiArt, err := r.ImageToANSI(*inputFile)
+	if err != nil {
+		fmt.Printf("Error converting image: %v\n", err)
+		os.Exit(1)
+	}
+	compressedArt := r.CompressANSI(ansiArt)
 	endComputation := time.Now()
 
 	// Output result
@@ -141,10 +140,11 @@ func main() {
 		fmt.Print(compressedArt)
 	}
 
+	hits, misses, hitRate := r.CacheStats()
 	fmt.Printf("Computation time: %v\n", endComputation.Sub(endInit))
-	fmt.Printf("BestBlock calculation time: %v\n", img2ansi.BestBlockTime)
+	fmt.Printf("BestBlock calculation time: %v\n", r.GetBestBlockTime())
 	fmt.Printf("Total string length: %d\n", len(ansiArt))
 	fmt.Printf("Compressed string length: %d\n", len(compressedArt))
-	fmt.Printf("Block Cache: %d hits, %d misses\n",
-		img2ansi.LookupHits, img2ansi.LookupMisses)
+	fmt.Printf("Block Cache: %d hits, %d misses (%.1f%% hit rate)\n",
+		hits, misses, hitRate*100)
 }

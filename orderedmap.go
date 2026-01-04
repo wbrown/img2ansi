@@ -80,3 +80,19 @@ func (om *OrderedMap) Len() int {
 
 	return len(om.keys)
 }
+
+// ToAnsiData converts the OrderedMap to an AnsiData slice.
+// Keys must be uint32 and values must be strings.
+func (om *OrderedMap) ToAnsiData() AnsiData {
+	om.mu.RLock()
+	defer om.mu.RUnlock()
+
+	data := make(AnsiData, 0, len(om.keys))
+	for _, k := range om.keys {
+		data = append(data, AnsiEntry{
+			Key:   k.(uint32),
+			Value: om.values[k].(string),
+		})
+	}
+	return data
+}

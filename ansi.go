@@ -11,15 +11,11 @@ type AnsiEntry struct {
 }
 type AnsiData []AnsiEntry
 
-var (
-	fgAnsi = NewOrderedMap()
-	bgAnsi = NewOrderedMap()
-)
 
 // CompressANSI compresses an ANSI image by combining adjacent blocks with
 // the same foreground and background colors. The function takes an ANSI
 // image as a string and returns the more efficient ANSI image as a string.
-func CompressANSI(ansiImage string) string {
+func (r *Renderer) CompressANSI(ansiImage string) string {
 	var compressed strings.Builder
 	var currentFg, currentBg, currentBlock string
 	var count int
@@ -145,17 +141,17 @@ func (ansiData AnsiData) ToOrderedMap() *OrderedMap {
 	return om
 }
 
-// renderToAnsi renders a 2D array of BlockRune structs to an ANSI string.
+// RenderToAnsi renders a 2D array of BlockRune structs to an ANSI string.
 // It does not perform any compression or optimization.
 // RenderToAnsi converts a 2D array of BlockRune to ANSI escape sequences.
 // It outputs both foreground and background colors for every character.
 // No character-specific optimizations are applied.
-func RenderToAnsi(blocks [][]BlockRune) string {
+func (r *Renderer) RenderToAnsi(blocks [][]BlockRune) string {
 	var sb strings.Builder
 
 	for _, row := range blocks {
 		for _, block := range row {
-			sb.WriteString(RenderBlockRune(block))
+			sb.WriteString(r.RenderBlockRune(block))
 		}
 		// Reset colors at the end of each line and add a newline
 		sb.WriteString("\x1b[0m\n")
@@ -165,8 +161,8 @@ func RenderToAnsi(blocks [][]BlockRune) string {
 }
 
 // RenderBlockRune renders a single BlockRune to an ANSI escape sequence string.
-func RenderBlockRune(block BlockRune) string {
-	fgCode, _ := fgAnsi.Get(block.FG.toUint32())
-	bgCode, _ := bgAnsi.Get(block.BG.toUint32())
+func (r *Renderer) RenderBlockRune(block BlockRune) string {
+	fgCode, _ := r.fgAnsi.Get(block.FG.toUint32())
+	bgCode, _ := r.bgAnsi.Get(block.BG.toUint32())
 	return fmt.Sprintf("\x1b[%s;%sm%c", fgCode, bgCode, block.Rune)
 }
