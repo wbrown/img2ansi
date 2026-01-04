@@ -153,9 +153,9 @@ func compareKdTrees(original, deserialized *ColorNode) error {
 }
 
 // Helper function to use in your tests
-func CompareComputedTablesSerialization(original *ComputedTables) error {
+func CompareComputedTablesSerialization(original *ComputedTables, method ColorDistanceMethod) error {
 	// Serialize
-	compact := CompactComputeTables(original.AnsiData)
+	compact := CompactComputeTables(original.AnsiData, method)
 
 	// Deserialize
 	deserialized := compact.Restore()
@@ -165,15 +165,32 @@ func CompareComputedTablesSerialization(original *ComputedTables) error {
 }
 
 func TestSerialization(t *testing.T) {
-	// Load your original palette
-	original, _, err := LoadPalette("colordata/ansi256.json")
+	t.Parallel()
+
+	// Load palette data directly
+	fgData, bgData, err := ReadAnsiDataFromJSON("colordata/ansi256.json")
 	if err != nil {
-		t.Fatalf("Failed to load original palette: %v", err)
+		t.Fatalf("Failed to load palette: %v", err)
 	}
 
+	// Compute tables with LAB method
+	method := LABMethod{}
+	original := ComputeTables(fgData, method)
+	original.AnsiData = fgData
+
 	// Test serialization and deserialization
-	err = CompareComputedTablesSerialization(original)
+	err = CompareComputedTablesSerialization(&original, method)
 	if err != nil {
 		t.Errorf("Serialization test failed: %v", err)
+	}
+
+	// Also test background if different
+	if !PaletteSame(fgData, bgData) {
+		bgOriginal := ComputeTables(bgData, method)
+		bgOriginal.AnsiData = bgData
+		err = CompareComputedTablesSerialization(&bgOriginal, method)
+		if err != nil {
+			t.Errorf("Background serialization test failed: %v", err)
+		}
 	}
 }

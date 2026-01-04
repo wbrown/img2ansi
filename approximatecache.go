@@ -35,76 +35,74 @@ type lookupEntry struct {
 	Matches []Match
 }
 
-// AddEntry adds a new entry to the cache. The entry is
-// represented by a Key, which is a Uint256, and a Match
-// struct that contains the rune, foreground color, background
-// color, and error of the match.
-func (cache ApproximateCache) addEntry(
+// addCacheEntry adds a new entry to the renderer's lookup cache. The entry is
+// represented by a key, which is a Uint256, and a Match struct that contains
+// the rune, foreground color, background color, and error of the match.
+func (r *Renderer) addCacheEntry(
 	k Uint256,
-	r rune,
+	rune rune,
 	fg RGB,
 	bg RGB,
 	block [4]RGB,
 	isEdge bool,
 ) {
+	r.lookupMisses++
+	// Calculate and store the original error for exact-match detection
+	quad := getQuadrantsForRune(rune)
+	originalError := r.calculateBlockError(block, quad, fg, bg, isEdge)
 	newMatch := Match{
-		Rune: r,
-		FG:   fg,
-		BG:   bg,
-		Error: calculateBlockError(
-			block,
-			getQuadrantsForRune(r),
-			fg,
-			bg,
-			isEdge,
-		),
+		Rune:  rune,
+		FG:    fg,
+		BG:    bg,
+		Error: originalError,
 	}
-	if entry, exists := lookupTable[k]; exists {
+	if entry, exists := r.lookupTable[k]; exists {
 		// Create a new slice with the appended match
 		updatedMatches := append(entry.Matches, newMatch)
 		// Update the map with the new slice
-		lookupTable[k] = lookupEntry{Matches: updatedMatches}
+		r.lookupTable[k] = lookupEntry{Matches: updatedMatches}
 	} else {
-		lookupTable[k] = lookupEntry{Matches: []Match{newMatch}}
+		r.lookupTable[k] = lookupEntry{Matches: []Match{newMatch}}
 	}
 }
 
-// GetEntry retrieves an entry from the cache. The entry is
-// represented by a Key, which is a Uint256, and a block of
-// 4 RGB values. The function returns the rune, foreground
-// color, background color, and a boolean Value indicating
-// whether the entry was found in the cache.
+// getCacheEntry retrieves an entry from the renderer's lookup cache. The entry
+// is represented by a key, which is a Uint256, and a block of 4 RGB values.
+// The function returns the rune, foreground color, background color, and a
+// boolean value indicating whether the entry was found in the cache.
 //
-// There may be multiple matches for a given Key, so the
-// function returns the match with the lowest error Value.
-func (cache ApproximateCache) getEntry(
+// There may be multiple matches for a given key, so the function evaluates
+// all cached patterns and returns the match with the lowest error below the
+// cache threshold.
+func (r *Renderer) getCacheEntry(
 	k Uint256,
 	block [4]RGB,
 	isEdge bool,
 ) (rune, RGB, RGB, bool) {
-	baseThreshold := CacheThreshold
+	baseThreshold := r.CacheThreshold
 	if isEdge {
 		baseThreshold *= 0.7
 	}
 	lowestError := math.MaxFloat64
 	var bestMatch *Match = nil
-	if entry, exists := lookupTable[k]; exists {
-		for _, match := range entry.Matches {
-			// Recalculate error for this match
-			matchError := calculateBlockError(block,
-				getQuadrantsForRune(match.Rune), match.FG, match.BG, isEdge)
-			if matchError < baseThreshold {
-				if matchError < lowestError {
-					lowestError = matchError
-					bestMatch = &match
-				}
+	if entry, exists := r.lookupTable[k]; exists {
+		for i := range entry.Matches {
+			match := &entry.Matches[i]
+			// Calculate error using the renderer's color method
+			quad := getQuadrantsForRune(match.Rune)
+			error := r.calculateBlockError(block, quad, match.FG, match.BG, isEdge)
+
+			// Accept if: (1) error below threshold, OR (2) exact match (same error as cached)
+			isExactMatch := math.Abs(error-match.Error) < 0.001
+			if error < lowestError && (error < baseThreshold || isExactMatch) {
+				lowestError = error
+				bestMatch = match
 			}
 		}
 		if bestMatch != nil {
-			LookupHits++
+			r.lookupHits++
 			return bestMatch.Rune, bestMatch.FG, bestMatch.BG, true
 		}
 	}
-	LookupMisses++
 	return 0, RGB{}, RGB{}, false
 }

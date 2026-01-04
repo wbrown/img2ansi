@@ -134,6 +134,7 @@ func getColorComponent(color RGB, axis int) uint8 {
 func (node *ColorNode) getCandidateColors(
 	block [4]RGB,
 	depth int,
+	method ColorDistanceMethod,
 ) colorDistanceSlice {
 	// Find initial candidates using KD-tree and sort by distance
 	var candidateColors colorDistanceSlice
@@ -147,10 +148,10 @@ func (node *ColorNode) getCandidateColors(
 	sort.Sort(sortedBlockColors)
 
 	for _, color := range sortedBlockColors {
-		nearest := node.kNearestNeighbors(color, depth)
+		nearest := node.kNearestNeighbors(color, depth, method)
 		for _, c := range nearest {
 			if _, seen := seenColors[c]; !seen {
-				distance := color.ColorDistance(c)
+				distance := method.Distance(color, c)
 				candidateColors = append(candidateColors,
 					colorWithDistance{
 						c,
@@ -169,12 +170,12 @@ func (node *ColorNode) getCandidateColors(
 // color found so far, the best distance found so far, and the depth of the
 // search as input, and returns the nearest neighbor and the distance to it.
 func (node *ColorNode) nearestNeighbor(
-	target RGB, best RGB, bestDist float64, depth int) (RGB, float64) {
+	target RGB, best RGB, bestDist float64, depth int, method ColorDistanceMethod) (RGB, float64) {
 	if node == nil {
 		return best, bestDist
 	}
 
-	dist := node.Color.ColorDistance(target)
+	dist := method.Distance(node.Color, target)
 	if dist < bestDist {
 		best = node.Color
 		bestDist = dist
@@ -203,7 +204,7 @@ func (node *ColorNode) nearestNeighbor(
 		}
 	}
 
-	best, bestDist = next.nearestNeighbor(target, best, bestDist, depth+1)
+	best, bestDist = next.nearestNeighbor(target, best, bestDist, depth+1, method)
 
 	// Check if we need to search the other branch
 	var axisDistance float64
@@ -217,7 +218,7 @@ func (node *ColorNode) nearestNeighbor(
 	}
 	if axisDistance*axisDistance < bestDist {
 		best, bestDist = other.nearestNeighbor(
-			target, best, bestDist, depth+1)
+			target, best, bestDist, depth+1, method)
 	}
 
 	return best, bestDist
@@ -234,7 +235,7 @@ type ColorDistance struct {
 // KD-tree. The function takes the root node of the KD-tree, the target color,
 // and the number of neighbors to find as input, and returns a slice of colors
 // sorted by distance.
-func (node *ColorNode) kNearestNeighbors(target RGB, k int) []RGB {
+func (node *ColorNode) kNearestNeighbors(target RGB, k int, method ColorDistanceMethod) []RGB {
 	allColors := node.getAllColors()
 	if len(allColors) <= k {
 		return allColors
@@ -244,7 +245,7 @@ func (node *ColorNode) kNearestNeighbors(target RGB, k int) []RGB {
 	heap.Init(&pq)
 
 	for _, color := range allColors {
-		dist := color.ColorDistance(target)
+		dist := method.Distance(color, target)
 		if pq.Len() < k {
 			heap.Push(&pq, ColorDistance{color, dist})
 		} else if dist < pq[0].distance {

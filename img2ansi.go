@@ -14,80 +14,30 @@ const (
 	ESC = "\u001b"
 )
 
-var (
-	TargetWidth    = 100
-	ScaleFactor    = 3.0
-	MaxChars       = 1048576
-	Quantization   = 1
-	KdSearch       = 0
-	CacheThreshold = 50.0
-
-	blocks = []blockDef{
-		{' ', Quadrants{false, false, false, false}}, // Empty space
-		{'▘', Quadrants{true, false, false, false}},  // Quadrant upper left
-		{'▝', Quadrants{false, true, false, false}},  // Quadrant upper right
-		{'▀', Quadrants{true, true, false, false}},   // Upper half block
-		{'▖', Quadrants{false, false, true, false}},  // Quadrant lower left
-		{'▌', Quadrants{true, false, true, false}},   // Left half block
-		{'▞', Quadrants{false, true, true, false}},   // Quadrant diagonal upper right and lower left
-		{'▛', Quadrants{true, true, true, false}},    // Three quadrants: upper left, upper right, lower left
-		{'▗', Quadrants{false, false, false, true}},  // Quadrant lower right
-		{'▚', Quadrants{true, false, false, true}},   // Quadrant diagonal upper left and lower right
-		{'▐', Quadrants{false, true, false, true}},   // Right half block
-		{'▜', Quadrants{true, true, false, true}},    // Three quadrants: upper left, upper right, lower right
-		{'▄', Quadrants{false, false, true, true}},   // Lower half block
-		{'▙', Quadrants{true, false, true, true}},    // Three quadrants: upper left, lower left, lower right
-		{'▟', Quadrants{false, true, true, true}},    // Three quadrants: upper right, lower left, lower right
-		{'█', Quadrants{true, true, true, true}},     // Full block
-	}
-
-	fgAnsiRev = map[string]uint32{}
-	bgAnsiRev = map[string]uint32{}
-
-	fgClosestColor *[]RGB
-	bgClosestColor *[]RGB
-
-	lookupTable    ApproximateCache
-	LookupHits     int
-	LookupMisses   int
-	BeginInitTime  time.Time
-	BestBlockTime  time.Duration
-	bgTree         *ColorNode
-	fgTree         *ColorNode
-	DistinctColors int
-)
+// Blocks defines the 16 Unicode block drawing characters used for 2x2 pixel blocks.
+// The ordering is important: each index encodes which quadrants are filled as a 4-bit pattern.
+var Blocks = []blockDef{
+	{' ', Quadrants{false, false, false, false}}, // Empty space
+	{'▘', Quadrants{true, false, false, false}},  // Quadrant upper left
+	{'▝', Quadrants{false, true, false, false}},  // Quadrant upper right
+	{'▀', Quadrants{true, true, false, false}},   // Upper half block
+	{'▖', Quadrants{false, false, true, false}},  // Quadrant lower left
+	{'▌', Quadrants{true, false, true, false}},   // Left half block
+	{'▞', Quadrants{false, true, true, false}},   // Quadrant diagonal upper right and lower left
+	{'▛', Quadrants{true, true, true, false}},    // Three quadrants: upper left, upper right, lower left
+	{'▗', Quadrants{false, false, false, true}},  // Quadrant lower right
+	{'▚', Quadrants{true, false, false, true}},   // Quadrant diagonal upper left and lower right
+	{'▐', Quadrants{false, true, false, true}},   // Right half block
+	{'▜', Quadrants{true, true, false, true}},    // Three quadrants: upper left, upper right, lower right
+	{'▄', Quadrants{false, false, true, true}},   // Lower half block
+	{'▙', Quadrants{true, false, true, true}},    // Three quadrants: upper left, lower left, lower right
+	{'▟', Quadrants{false, true, true, true}},    // Three quadrants: upper right, lower left, lower right
+	{'█', Quadrants{true, true, true, true}},     // Full block
+}
 
 type blockDef struct {
 	Rune rune
 	Quad Quadrants
-}
-
-func init() {
-	lookupTable = make(ApproximateCache)
-	BeginInitTime = time.Now()
-	LookupHits = 0
-	LookupMisses = 0
-	initLab()
-}
-
-// buildReverseMap builds the reverse map for the ANSI color codes, it is
-// used to look up the ANSI color code for a given RGB color.
-func buildReverseMap() {
-	newFgAnsiRev := make(map[string]uint32)
-	fgAnsi.Iterate(func(key, value interface{}) {
-		fgColor := key.(uint32)
-		fgCode := value.(string)
-		newFgAnsiRev[fgCode] = fgColor
-	})
-
-	newBgAnsiRev := make(map[string]uint32)
-	bgAnsi.Iterate(func(key, value interface{}) {
-		bgColor := key.(uint32)
-		bgCode := value.(string)
-		newBgAnsiRev[bgCode] = bgColor
-	})
-	fgAnsiRev = newFgAnsiRev
-	bgAnsiRev = newBgAnsiRev
 }
 
 // BlockRune represents a 2x2 block of runes with foreground and
@@ -117,7 +67,7 @@ type Quadrants struct {
 // function takes an input image and a binary image with edges detected. It
 // returns a BlockRune representation with the dithering algorithm applied,
 // with colors quantized to the nearest ANSI color.
-func BrownDitherForBlocks(
+func (r *Renderer) BrownDitherForBlocks(
 	img *imageutil.RGBAImage,
 	edges *imageutil.GrayImage,
 ) [][]BlockRune {
@@ -145,7 +95,7 @@ func BrownDitherForBlocks(
 				edges.GrayAt(bx*2+1, by*2+1).Y > 128
 
 			// Find the best representation for this block
-			bestRune, fgColor, bgColor := FindBestBlockRepresentation(
+			bestRune, fgColor, bgColor := r.FindBestBlockRepresentation(
 				block, isEdge)
 
 			// Store the result
@@ -182,38 +132,47 @@ func BrownDitherForBlocks(
 // indicating whether the block is an edge block, and returns the best rune
 // representation, the foreground color, and the background color for the
 // block.
-func FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
+func (r *Renderer) FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 	// Map each color in the block to its closest palette color
 	var fgPaletteBlock [4]RGB
 	var bgPaletteBlock [4]RGB
+
+	// Use precomputed tables if available, otherwise use KD-tree lookup
+	useKdTreeLookup := r.fgClosestColor == nil || r.bgClosestColor == nil
 	for i, color := range block {
-		if fgClosestColor == nil || bgClosestColor == nil {
-			panic("fgClosestColor or bgClosestColor is nil")
+		if useKdTreeLookup {
+			// Runtime KD-tree lookup for custom ColorDistanceMethod
+			fgPaletteBlock[i], _ = r.fgTree.nearestNeighbor(
+				color, r.fgTree.Color, math.MaxFloat64, 0, r.ColorMethod)
+			bgPaletteBlock[i], _ = r.bgTree.nearestNeighbor(
+				color, r.bgTree.Color, math.MaxFloat64, 0, r.ColorMethod)
+		} else {
+			// Fast table lookup for built-in methods
+			fgPaletteBlock[i] = (*r.fgClosestColor)[color.toUint32()]
+			bgPaletteBlock[i] = (*r.bgClosestColor)[color.toUint32()]
 		}
-		fgPaletteBlock[i] = (*fgClosestColor)[color.toUint32()]
-		bgPaletteBlock[i] = (*bgClosestColor)[color.toUint32()]
 	}
 	blockKey := rgbsPairToUint256(fgPaletteBlock, bgPaletteBlock)
 
 	// Check the block cache for a match
-	if r, fg, bg, found := lookupTable.getEntry(
+	if rune, fg, bg, found := r.getCacheEntry(
 		blockKey, block, isEdge); found {
-		return r, fg, bg
+		return rune, fg, bg
 	}
 	startBlock := time.Now()
 
-	if KdSearch == 0 || DistinctColors < int(CacheThreshold) {
+	if r.KdSearch == 0 || r.distinctColors < int(r.CacheThreshold) {
 		var bestRune rune
 		var bestFG, bestBG RGB
 		minError := math.MaxFloat64
 
-		for _, b := range blocks {
-			fgAnsi.Iterate(func(fg, _ interface{}) {
+		for _, b := range Blocks {
+			r.fgAnsi.Iterate(func(fg, _ interface{}) {
 				fgRgb := rgbFromUint32(fg.(uint32))
-				bgAnsi.Iterate(func(bg, _ interface{}) {
+				r.bgAnsi.Iterate(func(bg, _ interface{}) {
 					bgRgb := rgbFromUint32(bg.(uint32))
 					if fg != bg {
-						colorError := calculateBlockError(
+						colorError := r.calculateBlockError(
 							block, b.Quad, fgRgb, bgRgb, isEdge)
 						if colorError < minError {
 							minError = colorError
@@ -226,29 +185,29 @@ func FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 			})
 		}
 
-		BestBlockTime += time.Since(startBlock)
+		r.bestBlockTime += time.Since(startBlock)
 		// Add the result to the lookup table
-		lookupTable.addEntry(blockKey, bestRune, bestFG, bestBG, block, isEdge)
+		r.addCacheEntry(blockKey, bestRune, bestFG, bestBG, block, isEdge)
 		return bestRune, bestFG, bestBG
 	}
 
-	fgDepth := min(KdSearch, len(fgColors))
-	bgDepth := min(KdSearch, len(bgColors))
-	foregroundColors := fgTree.getCandidateColors(fgPaletteBlock, fgDepth)
-	backgroundColors := bgTree.getCandidateColors(bgPaletteBlock, bgDepth)
+	fgDepth := min(r.KdSearch, len(r.fgColors))
+	bgDepth := min(r.KdSearch, len(r.bgColors))
+	foregroundColors := r.fgTree.getCandidateColors(fgPaletteBlock, fgDepth, r.ColorMethod)
+	backgroundColors := r.bgTree.getCandidateColors(bgPaletteBlock, bgDepth, r.ColorMethod)
 
 	var bestRune rune
 	var bestFG, bestBG RGB
 	minError := math.MaxFloat64
 
-	for _, b := range blocks {
+	for _, b := range Blocks {
 		for _, fgWithDist := range foregroundColors {
 			for _, bgWithDist := range backgroundColors {
 				fg, bg := fgWithDist.color, bgWithDist.color
 				if fg == bg {
 					continue
 				}
-				colorError := calculateBlockError(
+				colorError := r.calculateBlockError(
 					block, b.Quad, fg, bg, isEdge)
 				// Round error to reduce floating-point variability
 				if colorError < minError ||
@@ -266,10 +225,10 @@ func FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 		}
 	}
 
-	BestBlockTime += time.Since(startBlock)
+	r.bestBlockTime += time.Since(startBlock)
 
 	// Add the result to the lookup table
-	lookupTable.addEntry(blockKey, bestRune, bestFG, bestBG, block, isEdge)
+	r.addCacheEntry(blockKey, bestRune, bestFG, bestBG, block, isEdge)
 
 	return bestRune, bestFG, bestBG
 }
@@ -279,7 +238,7 @@ func FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 // colors, the quadrants of the block representation, the foreground and
 // background colors, and a boolean Value indicating whether the block is
 // an edge block. It returns the error as a floating-point number.
-func calculateBlockError(
+func (r *Renderer) calculateBlockError(
 	block [4]RGB,
 	quad Quadrants,
 	fg, bg RGB,
@@ -297,7 +256,7 @@ func calculateBlockError(
 		} else {
 			targetColor = bg
 		}
-		totalError += color.ColorDistance(targetColor)
+		totalError += r.ColorMethod.Distance(color, targetColor)
 	}
 	if isEdge {
 		totalError *= 0.5
@@ -310,7 +269,7 @@ func calculateBlockError(
 // corresponding block character, or an empty Quadrants struct if the
 // character is not found.
 func getQuadrantsForRune(char rune) Quadrants {
-	for _, b := range blocks {
+	for _, b := range Blocks {
 		if b.Rune == char {
 			return b.Quad
 		}
@@ -351,19 +310,19 @@ func distributeError(img *imageutil.RGBAImage, y, x int, error RGBError, isEdge 
 
 // ImageToANSI converts an image to ANSI art. The function takes the path to
 // an image file as a string and returns the image as an ANSI string.
-func ImageToANSI(imagePath string) string {
+func (r *Renderer) ImageToANSI(imagePath string) (string, error) {
 	img, err := imageutil.LoadImage(imagePath)
 	if err != nil {
-		return fmt.Sprintf("Could not read image from %s: %v", imagePath, err)
+		return "", fmt.Errorf("could not read image from %s: %v", imagePath, err)
 	}
 
 	aspectRatio := float64(img.Width()) / float64(img.Height())
-	width := TargetWidth
-	height := int(float64(width) / aspectRatio / ScaleFactor)
+	width := r.TargetWidth
+	height := int(float64(width) / aspectRatio / r.ScaleFactor)
 
 	for {
 		resized, edges := imageutil.PrepareForANSI(img, width, height)
-		ditheredImg := BrownDitherForBlocks(resized, edges)
+		ditheredImg := r.BrownDitherForBlocks(resized, edges)
 
 		// Write the scaled image to a file for debugging
 		if err := imageutil.SavePNG(resized.RGBA, "resized.png"); err != nil {
@@ -374,8 +333,8 @@ func ImageToANSI(imagePath string) string {
 		if err := saveBlocksToPNG(ditheredImg,
 			"dithered.png",
 			len(ditheredImg[0])*8,
-			int(float64(len(ditheredImg)*8)*ScaleFactor),
-			ScaleFactor,
+			int(float64(len(ditheredImg)*8)*r.ScaleFactor),
+			r.ScaleFactor,
 		); err != nil {
 			fmt.Println(err)
 		}
@@ -385,15 +344,15 @@ func ImageToANSI(imagePath string) string {
 			fmt.Println(err)
 		}
 
-		ansiImage := RenderToAnsi(ditheredImg)
-		if len(ansiImage) <= MaxChars {
-			return ansiImage
+		ansiImage := r.RenderToAnsi(ditheredImg)
+		if len(ansiImage) <= r.MaxChars {
+			return ansiImage, nil
 		}
 
 		width -= 2
 		height = int(float64(width) / aspectRatio / 2)
 		if width < 10 {
-			return "Image too large to fit within character limit"
+			return "", fmt.Errorf("image too large to fit within character limit")
 		}
 	}
 }

@@ -1,3 +1,3 @@
 module github.com/wbrown/img2ansi/cmd/compute_tables
 
-go 1.22.5
+go 1.24.0

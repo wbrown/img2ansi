@@ -2,6 +2,7 @@ package img2ansi
 
 import (
 	"math"
+	"sync"
 
 	"github.com/wbrown/img2ansi/imageutil"
 )
@@ -33,12 +34,9 @@ type Uint256 struct {
 }
 
 var (
-	fgColors           = make([]RGB, 0)
-	bgColors           = make([]RGB, 0)
-	fgColorTable       = make(map[RGB]uint32)
-	bgColorTable       = make(map[RGB]uint32)
 	sRGBToLinearLookup [256]float64
 	linearToSRGBLookup [1024]uint8
+	labInitOnce        sync.Once
 )
 
 // toUint32 converts an RGB color to a 32-bit unsigned integer
@@ -114,8 +112,8 @@ func (rgb RGB) dithError(c2 RGB) [3]float64 {
 // quantizeColor quantizes an RGB color by rounding each channel to the
 // nearest multiple of the quantization factor. The function returns the
 // quantized RGB color.
-func (rgb RGB) quantizeColor() RGB {
-	qFactor := 256 / float64(Quantization)
+func (rgb RGB) quantizeColor(quantization int) RGB {
+	qFactor := 256 / float64(quantization)
 	return RGB{
 		uint8(math.Round(float64(rgb.R)/qFactor) * qFactor),
 		uint8(math.Round(float64(rgb.G)/qFactor) * qFactor),
@@ -161,6 +159,7 @@ func initLab() {
 // Convert RGB to CIE L*a*B*
 // toLab converts RGB to CIE L*a*B*
 func (rgb RGB) toLab() LAB {
+	labInitOnce.Do(initLab)
 	r := sRGBToLinearLookup[rgb.R]
 	g := sRGBToLinearLookup[rgb.G]
 	b := sRGBToLinearLookup[rgb.B]
@@ -192,6 +191,7 @@ func labf(t float64) float64 {
 }
 
 func (lab LAB) toRGB() RGB {
+	labInitOnce.Do(initLab)
 	y := (lab.L + 16.0) / 116.0
 	x := lab.A/500.0 + y
 	z := y - lab.B/200.0
@@ -218,43 +218,35 @@ func labfInv(t float64) float64 {
 	return (t - 16.0/116.0) / 7.787
 }
 
-// ColorDistanceMethod is an enum type for different color distance calculation methods
-type ColorDistanceMethod int
-
-const (
-	MethodRGB ColorDistanceMethod = iota
-	MethodLAB
-	MethodRedmean
-)
-
-var ColorDistanceMethods = []string{
-	"RGB",
-	"LAB",
-	"Redmean",
+// ColorDistanceMethod is an interface for different color distance calculation methods.
+// This allows users to implement custom distance metrics optimized for their use case.
+type ColorDistanceMethod interface {
+	// Distance calculates the perceptual distance between two colors.
+	Distance(c1, c2 RGB) float64
+	// Name returns the name of this distance method for debugging/display.
+	Name() string
 }
 
-// Global variable to set the color distance method
-var CurrentColorDistanceMethod = MethodRGB
+// RGBMethod calculates simple Euclidean distance in RGB space.
+// Fast but not perceptually accurate.
+type RGBMethod struct{}
 
-// ColorDistance switches between different color distance calculation methods
-func (r RGB) ColorDistance(other RGB) float64 {
-	switch CurrentColorDistanceMethod {
-	case MethodRGB:
-		return r.colorDistanceRGB(other)
-	case MethodLAB:
-		return r.colorDistanceLAB(other)
-	case MethodRedmean:
-		return r.colorDistanceRedmean(other)
-	default:
-		// Default to RGB if an unknown method is set
-		return r.colorDistanceRGB(other)
-	}
+func (m RGBMethod) Distance(c1, c2 RGB) float64 {
+	dr := int(c1.R) - int(c2.R)
+	dg := int(c1.G) - int(c2.G)
+	db := int(c1.B) - int(c2.B)
+	return math.Sqrt(float64(dr*dr + dg*dg + db*db))
 }
 
-// CIE76 color distance
-func (rgb RGB) colorDistanceLAB(other RGB) float64 {
-	lab1 := rgb.toLab()
-	lab2 := other.toLab()
+func (m RGBMethod) Name() string { return "RGB" }
+
+// LABMethod calculates CIE76 distance in L*a*b* perceptually uniform color space.
+// Most accurate but slower due to color space conversion.
+type LABMethod struct{}
+
+func (m LABMethod) Distance(c1, c2 RGB) float64 {
+	lab1 := c1.toLab()
+	lab2 := c2.toLab()
 
 	return math.Sqrt(
 		math.Pow(lab2.L-lab1.L, 2) +
@@ -262,12 +254,17 @@ func (rgb RGB) colorDistanceLAB(other RGB) float64 {
 			math.Pow(lab2.B-lab1.B, 2))
 }
 
-// Fast approximation of perceptual color distance
-func (rgb RGB) colorDistanceRedmean(other RGB) float64 {
-	rmean := (int(rgb.R) + int(other.R)) / 2
-	dr := int(rgb.R) - int(other.R)
-	dg := int(rgb.G) - int(other.G)
-	db := int(rgb.B) - int(other.B)
+func (m LABMethod) Name() string { return "LAB" }
+
+// RedmeanMethod uses weighted Euclidean distance as fast perceptual approximation.
+// Good balance between speed and perceptual accuracy.
+type RedmeanMethod struct{}
+
+func (m RedmeanMethod) Distance(c1, c2 RGB) float64 {
+	rmean := (int(c1.R) + int(c2.R)) / 2
+	dr := int(c1.R) - int(c2.R)
+	dg := int(c1.G) - int(c2.G)
+	db := int(c1.B) - int(c2.B)
 
 	return math.Sqrt(float64(
 		(((512 + rmean) * dr * dr) >> 8) +
@@ -275,14 +272,12 @@ func (rgb RGB) colorDistanceRedmean(other RGB) float64 {
 			(((767 - rmean) * db * db) >> 8)))
 }
 
-// colorDistance calculates the Euclidean distance between two RGB colors
-// in the RGB color space. The function returns the distance as a floating-
-// point number.
-func (rgb RGB) colorDistanceRGB(other RGB) float64 {
-	dr := int(rgb.R) - int(other.R)
-	dg := int(rgb.G) - int(other.G)
-	db := int(rgb.B) - int(other.B)
-	return math.Sqrt(float64(dr*dr + dg*dg + db*db))
+func (m RedmeanMethod) Name() string { return "Redmean" }
+
+// ColorDistance is a convenience method for use in KD-tree building and palette generation.
+// It defaults to Redmean distance. For runtime color matching, use ColorDistanceMethod interface instead.
+func (rgb RGB) ColorDistance(other RGB) float64 {
+	return RedmeanMethod{}.Distance(rgb, other)
 }
 
 const epsilon = 0.000001 // For floating-point comparisons
