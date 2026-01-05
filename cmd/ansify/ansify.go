@@ -60,7 +60,7 @@ func main() {
 		"Quantization factor (deprecated in v1.0.0)")
 	kdSearchDepth := flag.Int("kdsearch", 50,
 		"Number of nearest neighbors to search in KD-tree, 0 to disable")
-	threshold := flag.Float64("cache_threshold", 40.0,
+	threshold := flag.Float64("cache_threshold", 200.0,
 		"Max error for approximate cache matches (higher=faster, lower=better quality)")
 	colorMethod := flag.String("colormethod",
 		"RGB", "Color distance method: RGB, LAB, or Redmean")

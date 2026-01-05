@@ -58,7 +58,7 @@ type RendererOption func(*Renderer)
 
 // NewRenderer creates a new Renderer with the given options.
 // Default values: KdSearch=0 (use precomputed tables), ColorMethod=RedmeanMethod{},
-// ScaleFactor=2.0, CacheThreshold=50.0, MaxChars=1048576, TargetWidth=100, Quantization=256.
+// ScaleFactor=2.0, CacheThreshold=200.0, MaxChars=1048576, TargetWidth=100, Quantization=256.
 func NewRenderer(opts ...RendererOption) *Renderer {
 	r := &Renderer{
 		// Default configuration
@@ -67,7 +67,7 @@ func NewRenderer(opts ...RendererOption) *Renderer {
 		MaxChars:       1048576,
 		Quantization:   256,
 		KdSearch:       0, // Use precomputed tables by default
-		CacheThreshold: 50.0,
+		CacheThreshold: 200.0,
 		ColorMethod:    RedmeanMethod{},
 
 		// Initialize maps and cache
