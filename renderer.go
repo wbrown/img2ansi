@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"strings"
 	"time"
 )
@@ -49,8 +50,9 @@ type Renderer struct {
 	lookupMisses int
 
 	// Stats (private)
-	beginInitTime time.Time
-	bestBlockTime time.Duration
+	beginInitTime       time.Time
+	bestBlockTime       time.Duration
+	usingPrecomputed    bool // true if using precomputed tables, false if KD-tree fallback
 }
 
 // RendererOption is a functional option for configuring a Renderer.
@@ -258,12 +260,20 @@ func (r *Renderer) loadPaletteBinary(path string) (*ComputedTables, *ComputedTab
 
 	cct, ok := cmct[r.ColorMethod.Name()]
 	if !ok {
-		// Custom ColorDistanceMethod not in precomputed binary - use fast JSON loading
-		// This only computes KD-tree structures (instant), skipping the expensive 16.7M
-		// lookup table. The Renderer uses runtime KD-tree lookups instead.
+		// ColorMethod not in precomputed binary - fall back to KD-tree search
+		// This is MUCH slower than precomputed tables
+		fmt.Fprintf(os.Stderr, "WARNING: ColorMethod %q not found in precomputed tables for palette %q.\n", r.ColorMethod.Name(), path)
+		fmt.Fprintf(os.Stderr, "         Falling back to slow KD-tree search. This will be 100-1000x slower.\n")
+		fmt.Fprintf(os.Stderr, "         Available methods in palette: ")
+		for name := range cmct {
+			fmt.Fprintf(os.Stderr, "%s ", name)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+		r.usingPrecomputed = false
 		jsonPath := fmt.Sprintf("colordata/%s.json", path)
 		return r.loadPaletteJSON(jsonPath, true)
 	}
+	r.usingPrecomputed = true
 	fgTables := cct.Fg.Restore()
 	bgTables := cct.Bg.Restore()
 
@@ -344,4 +354,10 @@ func (r *Renderer) ResetStats() {
 // GetBestBlockTime returns the cumulative time spent in FindBestBlockRepresentation.
 func (r *Renderer) GetBestBlockTime() time.Duration {
 	return r.bestBlockTime
+}
+
+// UsingPrecomputedTables returns true if the renderer is using precomputed
+// lookup tables for color matching, false if it fell back to KD-tree search.
+func (r *Renderer) UsingPrecomputedTables() bool {
+	return r.usingPrecomputed
 }

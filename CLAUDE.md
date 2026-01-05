@@ -232,6 +232,36 @@ This preprocessing converts expensive per-pixel operations into simple array loo
 
 The brute force approach (computing all 16.7M possibilities) combined with clever storage (index optimization) exemplifies the project's philosophy: maximum performance through preprocessing.
 
+### How Block Search Uses Precomputed Tables
+
+The block search algorithm has two stages that work together:
+
+**Stage 1: Per-Pixel Color Mapping**
+For each of the 4 pixels in a 2×2 block, find the closest palette color:
+- With precomputed tables: O(1) array lookup
+- Without: KD-tree nearest neighbor search
+
+This produces 4 "anchor" colors - the optimal palette color for each pixel individually.
+
+**Stage 2: Block Search**
+The challenge: we can only use 2 colors (foreground + background) for all 4 pixels, but we have 4 potentially different anchors. The search finds the best 2-color approximation:
+
+- **Small palettes (≤32 colors)**: Brute force all combinations
+  - 16 patterns × 32 fg × 32 bg = 16,384 iterations (fast)
+
+- **Large palettes (>32 colors)**: KD-tree candidate search
+  - Uses anchors from Stage 1 as starting points
+  - Finds N colors nearest to each anchor (default N=50)
+  - Tests combinations of these candidates
+  - 16 patterns × 50 fg × 50 bg = 40,000 iterations (vs 1M+ for brute force)
+
+**Key insight**: The KD-tree candidate search *leverages* precomputed tables. The anchors from Stage 1 guide where to search in Stage 2. We're not searching the entire color space - we're searching near the known per-pixel optima.
+
+This two-stage approach gives us:
+- O(1) per-pixel mapping (precomputed)
+- O(depth²) block search instead of O(colors²)
+- Cache reuse across similar blocks
+
 ### Color Table Serialization
 
 The serialization system uses multiple compression layers:

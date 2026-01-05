@@ -127,11 +127,27 @@ func (r *Renderer) BrownDitherForBlocks(
 	return result
 }
 
-// FindBestBlockRepresentation finds the best rune representation for a 2x2
-// block of colors. The function takes the block of colors, a boolean Value
-// indicating whether the block is an edge block, and returns the best rune
-// representation, the foreground color, and the background color for the
-// block.
+// FindBestBlockRepresentation finds the optimal (rune, fg, bg) for a 2x2 pixel block.
+//
+// The algorithm has two stages:
+//
+// Stage 1: Per-Pixel Color Mapping
+// For each of the 4 pixels, find the closest palette color. This uses either:
+//   - Precomputed tables (O(1) lookup) for built-in ColorDistanceMethods
+//   - KD-tree nearest neighbor search for custom methods
+// This gives us 4 "anchor" colors - the per-pixel optima.
+//
+// Stage 2: Block Search
+// We're constrained to 2 colors (fg, bg) for all 4 pixels, so the per-pixel
+// optima may not be achievable. We search for the best 2-color combination:
+//   - Small palettes (≤32 colors): Brute force all fg×bg×pattern combinations
+//   - Large palettes: KD-tree candidate search using anchors from Stage 1
+//
+// The KD-tree candidate search leverages the precomputed results: it finds
+// colors NEAR each anchor, then tests combinations. This limits search from
+// O(colors²) to O(depth²) while still finding high-quality solutions.
+//
+// Results are cached by the palette-mapped block key for reuse.
 func (r *Renderer) FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune, RGB, RGB) {
 	// Map each color in the block to its closest palette color
 	var fgPaletteBlock [4]RGB
@@ -161,7 +177,9 @@ func (r *Renderer) FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune,
 	}
 	startBlock := time.Now()
 
-	if r.KdSearch == 0 || r.distinctColors < int(r.CacheThreshold) {
+	// Use brute force search only for small palettes (<=32 colors)
+	// For larger palettes, use KD-tree candidate search to avoid O(n²) explosion
+	if r.distinctColors <= 32 {
 		var bestRune rune
 		var bestFG, bestBG RGB
 		minError := math.MaxFloat64
@@ -191,8 +209,13 @@ func (r *Renderer) FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune,
 		return bestRune, bestFG, bestBG
 	}
 
-	fgDepth := min(r.KdSearch, len(r.fgColors))
-	bgDepth := min(r.KdSearch, len(r.bgColors))
+	// Use KdSearch depth, or default to 50 if not specified (for large palettes with precomputed tables)
+	searchDepth := r.KdSearch
+	if searchDepth == 0 {
+		searchDepth = 50
+	}
+	fgDepth := min(searchDepth, len(r.fgColors))
+	bgDepth := min(searchDepth, len(r.bgColors))
 	foregroundColors := r.fgTree.getCandidateColors(fgPaletteBlock, fgDepth, r.ColorMethod)
 	backgroundColors := r.bgTree.getCandidateColors(bgPaletteBlock, bgDepth, r.ColorMethod)
 

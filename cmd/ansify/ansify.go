@@ -58,8 +58,8 @@ func main() {
 		"Maximum number of characters in the output")
 	_ = flag.Int("quantization", 256,
 		"Quantization factor (deprecated in v1.0.0)")
-	kdSearchDepth := flag.Int("kdsearch", 50,
-		"Number of nearest neighbors to search in KD-tree, 0 to disable")
+	kdSearchDepth := flag.Int("kdsearch", 0,
+		"KD-tree search depth (0=use fast precomputed tables, >0=runtime search)")
 	threshold := flag.Float64("cache_threshold", 200.0,
 		"Max error for approximate cache matches (higher=faster, lower=better quality)")
 	colorMethod := flag.String("colormethod",
@@ -108,6 +108,13 @@ func main() {
 		img2ansi.WithPalette(*paletteFile),
 	)
 	endInit := time.Now()
+
+	// Error out if precomputed tables aren't available (would be too slow)
+	if !r.UsingPrecomputedTables() {
+		fmt.Fprintf(os.Stderr, "Error: No precomputed tables for colormethod %q.\n", *colorMethod)
+		fmt.Fprintf(os.Stderr, "Use -colormethod with one of: RGB, LAB, Redmean\n")
+		os.Exit(1)
+	}
 
 	fmt.Printf("Renderer initialized\n"+
 		"colormethod: %s\n"+

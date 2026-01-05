@@ -502,3 +502,162 @@ func TestRendererCachingWithMandrill(t *testing.T) {
 
 	t.Logf("Speedup: %.2fx", float64(duration1)/float64(duration2))
 }
+
+// Benchmarks for profiling
+
+// BenchmarkRenderMandrillAnsi256 benchmarks full render pipeline with 256-color palette.
+// Uses precomputed tables (KdSearch=0, the default).
+func BenchmarkRenderMandrillAnsi256(b *testing.B) {
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		b.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	r := NewRenderer(WithPalette("ansi256"))
+	width, height := 80, 40
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		blocks := r.BrownDitherForBlocks(resized, edges)
+		_ = r.CompressANSI(r.RenderToAnsi(blocks))
+	}
+}
+
+// BenchmarkRenderMandrillAnsi16 benchmarks full render pipeline with 16-color palette.
+func BenchmarkRenderMandrillAnsi16(b *testing.B) {
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		b.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	r := NewRenderer(WithPalette("ansi16"))
+	width, height := 80, 40
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		blocks := r.BrownDitherForBlocks(resized, edges)
+		_ = r.CompressANSI(r.RenderToAnsi(blocks))
+	}
+}
+
+// BenchmarkRenderMandrillColdCache benchmarks with fresh cache each iteration.
+func BenchmarkRenderMandrillColdCache(b *testing.B) {
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		b.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	width, height := 80, 40
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// New renderer each time = cold cache
+		r := NewRenderer(WithPalette("ansi256"))
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		blocks := r.BrownDitherForBlocks(resized, edges)
+		_ = r.CompressANSI(r.RenderToAnsi(blocks))
+	}
+}
+
+// BenchmarkRenderMandrillWarmCache benchmarks with pre-warmed cache.
+func BenchmarkRenderMandrillWarmCache(b *testing.B) {
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		b.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	r := NewRenderer(WithPalette("ansi256"))
+	width, height := 80, 40
+
+	// Warm the cache
+	resized, edges := imageutil.PrepareForANSI(img, width, height)
+	blocks := r.BrownDitherForBlocks(resized, edges)
+	_ = r.CompressANSI(r.RenderToAnsi(blocks))
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		blocks := r.BrownDitherForBlocks(resized, edges)
+		_ = r.CompressANSI(r.RenderToAnsi(blocks))
+	}
+}
+
+// BenchmarkRenderMandrillLarge benchmarks at larger output size (160x80).
+func BenchmarkRenderMandrillLarge(b *testing.B) {
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		b.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	r := NewRenderer(WithPalette("ansi256"))
+	width, height := 160, 80
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		blocks := r.BrownDitherForBlocks(resized, edges)
+		_ = r.CompressANSI(r.RenderToAnsi(blocks))
+	}
+}
+
+// BenchmarkBrownDitherOnly benchmarks just the dithering step (no image prep).
+func BenchmarkBrownDitherOnly(b *testing.B) {
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		b.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	r := NewRenderer(WithPalette("ansi256"))
+	width, height := 80, 40
+
+	// Prepare image once
+	resized, edges := imageutil.PrepareForANSI(img, width, height)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Reset cache to measure dithering cost consistently
+		r.lookupTable = make(ApproximateCache)
+		r.lookupHits = 0
+		r.lookupMisses = 0
+		_ = r.BrownDitherForBlocks(resized, edges)
+	}
+}
+
+// BenchmarkPrepareForANSI benchmarks just the image preparation step.
+func BenchmarkPrepareForANSI(b *testing.B) {
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		b.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	width, height := 80, 40
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = imageutil.PrepareForANSI(img, width, height)
+	}
+}
+
+// BenchmarkRenderKdSearch benchmarks with runtime KD-tree search.
+// This is slower than precomputed tables but supports custom ColorDistanceMethods.
+func BenchmarkRenderKdSearch(b *testing.B) {
+	img, err := imageutil.LoadImage("testdata/mandrill.tiff")
+	if err != nil {
+		b.Fatalf("Failed to load mandrill.tiff: %v", err)
+	}
+
+	r := NewRenderer(
+		WithPalette("ansi256"),
+		WithKdSearch(50),
+	)
+	width, height := 80, 40
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		blocks := r.BrownDitherForBlocks(resized, edges)
+		_ = r.CompressANSI(r.RenderToAnsi(blocks))
+	}
+}
