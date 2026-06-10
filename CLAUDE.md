@@ -468,22 +468,40 @@ func (rgb RGB) subtractToError(other RGB) RGBError {
 }
 ```
 
-### Unicode Block Pattern Optimization
+### Unicode Block Pattern Quadrants (Historical Bug, Fixed)
 
-**Critical Performance Detail**: The quadrant checking in the hot path uses a clever bitwise trick:
-```go
-// PERFORMANCE: This uses a bitwise operation on the rune value
-// instead of looking up quadrants. The Unicode block characters
-// are specifically chosen so their codepoints encode which
-// quadrants are filled. This is a critical hot path optimization.
-if (bestRune & (1 << (3 - i))) != 0 {
-    targetColor = fgColor
-} else {
-    targetColor = bgColor
-}
-```
+Error diffusion measures each pixel's residual against the color it
+actually renders as (foreground or background), determined by the rune's
+quadrant pattern via `getQuadrantsForRune` (a map built once from `Blocks`,
+amortized over the 4 pixels of each block — not a hot-path concern).
 
-This works because the Unicode block characters were carefully selected so their codepoint values encode the quadrant pattern. Do NOT replace with a lookup function - this is in the innermost loop and performance-critical.
+**Historical note**: this code previously used a bitwise trick on the rune
+*codepoint* (`bestRune & (1 << (3 - i))`) on the belief that the block
+characters' codepoints encode their quadrant patterns. They do not — the
+trick disagreed with the quadrant table for 25 of 64 pixels, so diffusion
+propagated residuals measured against the wrong colors. Fixing it improved
+the blurred-LAB error metric on every gradient and most photo tests (see
+`diffusion_quality_test.go`).
+
+What IS true: the `Blocks` array **index** encodes the quadrant pattern
+(bit 0 = top-left, bit 1 = top-right, bit 2 = bottom-left, bit 3 =
+bottom-right), verified by `TestBlocksIndexEncodesQuadrants`. If a bitwise
+form is ever wanted again, it must use the array index, not the rune.
+
+### Measuring Diffusion Quality
+
+`diffusion_quality_test.go` is the quality harness. It renders block
+output back to pixels and scores it against the pre-dither reference:
+
+- **Blurred LAB ΔE (primary)**: Gaussian-blur both images (σ=1, 2, 4),
+  compare mean ΔE in LAB. Diffusion's job is local average tone; the blur
+  measures exactly that. Raw MSE *rises* under dithering (it rewards
+  banding) and is reported only as a secondary signal.
+- **Color transitions**: more transitions on a smooth ramp = smoother
+  dithering (port of the original harness metric).
+- Arms: `no-diffusion` (per-block quantization) vs `diffusion`.
+- `TestDiffusionQualityPhotos` runs against any PNGs in `images/`
+  (not committed); set `DIFFUSION_PNGS=<dir>` to dump comparison renders.
 
 ### Terminal Color Palette Variations
 
