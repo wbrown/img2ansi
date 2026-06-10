@@ -526,22 +526,16 @@ func (m meanColorConverter) Convert(img *imageutil.RGBAImage, edges *imageutil.G
 }
 
 // TestConverterArms exercises the cross-converter harness end to end:
-// the quadrant dither and an 8x8 full-block mean-color baseline run on
-// the same cell grid, render through their own paths (quadrant table vs
-// font glyphs), and score against the same reference. The dither must
-// beat the baseline — that is the floor a real glyph matcher has to
-// clear to justify itself.
+// the quadrant dither, the glyph matcher, and an 8x8 full-block
+// mean-color baseline run on the same cell grid under both the ansi16
+// and ansi256 palettes, render through their own paths (quadrant table
+// vs font glyphs), and score against the same reference. The original
+// research found 256 colors rescue 8x8 matching; this is where that
+// claim is measured.
 func TestConverterArms(t *testing.T) {
-	r := NewRenderer(WithPalette("ansi16"))
 	font, err := LoadEmbeddedFont("font8x8")
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	arms := []converterArm{
-		quadrantArm("quadrant-dither", r),
-		fontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
-		fontArm("mean-color-block", meanColorConverter{r}, font),
 	}
 
 	patterns := []struct {
@@ -553,36 +547,49 @@ func TestConverterArms(t *testing.T) {
 		{"fleshtone", syntheticSource(makeFleshtone), 64, 16},
 		{"color-ramp", syntheticSource(makeColorRamp), 64, 32},
 	}
-	for _, p := range patterns {
-		res := measureConverterArms(t, p.name, p.src, p.cellsW, p.cellsH, arms)
-		if res["quadrant-dither"] >= res["mean-color-block"] {
-			t.Errorf("%s: quadrant dither (ΔE %.2f) should beat the mean-color baseline (ΔE %.2f)",
-				p.name, res["quadrant-dither"], res["mean-color-block"])
-		}
-		// At 16 colors the matcher only ties the flat-block baseline on
-		// smooth synthetic ramps — one (fg, bg) pair per 8x8 cell cannot
-		// follow a gradient regardless of glyph, so the medium is the
-		// constraint (the original research finding). The invariant is
-		// that exhaustive matching is never meaningfully worse than the
-		// degenerate flat block, which is inside its search space.
-		if res["glyph-matcher"] > res["mean-color-block"]*1.05 {
-			t.Errorf("%s: glyph matcher (ΔE %.2f) should not lose to the mean-color baseline (ΔE %.2f)",
-				p.name, res["glyph-matcher"], res["mean-color-block"])
-		}
-	}
 
-	photos, _ := filepath.Glob("images/*.png")
-	for _, path := range photos {
-		img, err := imageutil.LoadImage(path)
-		if err != nil {
-			continue
-		}
-		cellsW := 100
-		aspect := float64(img.Width()) / float64(img.Height())
-		cellsH := int(float64(cellsW) / aspect / 2.0)
-		name := filepath.Base(path)
-		measureConverterArms(t, name[:len(name)-len(".png")],
-			photoSource(img), cellsW, cellsH, arms)
+	for _, pal := range []string{"ansi16", "ansi256"} {
+		t.Run(pal, func(t *testing.T) {
+			r := NewRenderer(WithPalette(pal))
+			arms := []converterArm{
+				quadrantArm("quadrant-dither", r),
+				fontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
+				fontArm("mean-color-block", meanColorConverter{r}, font),
+			}
+
+			for _, p := range patterns {
+				res := measureConverterArms(t, p.name+"-"+pal,
+					p.src, p.cellsW, p.cellsH, arms)
+				if res["quadrant-dither"] >= res["mean-color-block"] {
+					t.Errorf("%s/%s: quadrant dither (ΔE %.2f) should beat the mean-color baseline (ΔE %.2f)",
+						p.name, pal, res["quadrant-dither"], res["mean-color-block"])
+				}
+				// The flat block is inside the matcher's search space
+				// (the cell-mean anchor guarantees it), so exhaustive
+				// matching can never be meaningfully worse than the
+				// mean-color baseline. Whether it does much BETTER is
+				// palette-dependent: one (fg, bg) pair per 8x8 cell
+				// cannot follow a gradient at 16 colors.
+				if res["glyph-matcher"] > res["mean-color-block"]*1.05 {
+					t.Errorf("%s/%s: glyph matcher (ΔE %.2f) should not lose to the mean-color baseline (ΔE %.2f)",
+						p.name, pal, res["glyph-matcher"], res["mean-color-block"])
+				}
+			}
+
+			photos, _ := filepath.Glob("images/*.png")
+			for _, path := range photos {
+				img, err := imageutil.LoadImage(path)
+				if err != nil {
+					continue
+				}
+				cellsW := 100
+				aspect := float64(img.Width()) / float64(img.Height())
+				cellsH := int(float64(cellsW) / aspect / 2.0)
+				name := filepath.Base(path)
+				measureConverterArms(t, name[:len(name)-len(".png")]+"-"+pal,
+					photoSource(img), cellsW, cellsH, arms)
+			}
+		})
 	}
 }
 

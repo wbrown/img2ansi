@@ -402,9 +402,13 @@ similarity scorer was deliberately not ported — see the lab README for
 the ideal-mask/popcount formulation that should replace it.
 
 Key findings so far:
-- 2×2 blocks still outperform 8×8 character matching at 16 colors; both
-  spend one glyph + two colors per cell, but 8×8 must cover 16× more
-  source pixels with them. 256 colors largely close the gap.
+- 2×2 blocks outperform 8×8 character matching at every palette size;
+  both spend one glyph + two colors per cell, but 8×8 must cover 16×
+  more source pixels with them. The old "256 colors largely close the
+  gap" reading did not survive quantitative measurement: 256 colors
+  improve both modes 3–4×, but the dither improves faster (diffusion
+  exploits the finer palette), so the relative gap widens — see the
+  standings tables in `docs/glyph-research/README.md`.
 - Simple heuristics (DominantColorSelector) are near-optimal at 256
   colors — validated by true exhaustive search. The constraint is the
   medium, not the algorithms.

@@ -28,9 +28,11 @@ import (
 //
 // Candidate colors are the cell's anchor palette colors: the nearest
 // palette color of each pixel, ranked by frequency (the dominant-color
-// heuristic validated by the original research). Candidate glyphs are
-// the font's genuine glyphs only — synthesized stand-ins never expand
-// what the target medium is claimed to support.
+// heuristic validated by the original research), plus the nearest color
+// to the cell mean — which keeps the flat block inside the search space
+// and matters on smooth gradients under fine palettes. Candidate glyphs
+// are the font's genuine glyphs only — synthesized stand-ins never
+// expand what the target medium is claimed to support.
 type GlyphMatcher struct {
 	renderer *Renderer
 	font     *FontBitmaps
@@ -105,15 +107,37 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) BlockRune
 	const n = GlyphWidth * GlyphHeight
 
 	var pixels [n]RGB
+	var rSum, gSum, bSum int
 	counts := make(map[RGB]int, 8)
 	for i := 0; i < n; i++ {
 		p := img.GetRGB(x0+i%GlyphWidth, y0+i/GlyphWidth)
 		c := RGB{p.R, p.G, p.B}
 		pixels[i] = c
+		rSum += int(c.R)
+		gSum += int(c.G)
+		bSum += int(c.B)
 		counts[m.renderer.nearestFgColor(c)]++
 	}
 
-	anchors := topAnchors(counts, m.maxAnchors())
+	// The nearest color to the cell MEAN is anchored alongside the
+	// per-pixel dominants: it guarantees the flat block is in the
+	// search space (so exhaustive matching can never lose to the
+	// mean-color baseline), and with fine palettes it often differs
+	// from every per-pixel anchor on smooth gradients.
+	meanAnchor := m.renderer.nearestFgColor(RGB{
+		uint8(rSum / n), uint8(gSum / n), uint8(bSum / n)})
+
+	anchors := topAnchors(counts, m.maxAnchors()-1)
+	hasMean := false
+	for _, a := range anchors {
+		if a == meanAnchor {
+			hasMean = true
+			break
+		}
+	}
+	if !hasMean {
+		anchors = append(anchors, meanAnchor)
+	}
 	if len(anchors) == 1 {
 		// Flat cell: with fg == bg every glyph renders identically.
 		return BlockRune{Rune: m.flatRune, FG: anchors[0], BG: anchors[0]}

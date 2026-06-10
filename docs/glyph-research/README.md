@@ -235,22 +235,53 @@ quadrant dither wins everywhere by roughly 2×, and exhaustive glyph
 matching beats the flat mean-color block only modestly on photos
 (mandrill −8%, fox −3%) while tying it on smooth ramps — one (fg, bg)
 pair per 8×8 cell cannot follow a gradient no matter which glyph is
-chosen. The medium, not the matching, is the constraint; an earlier
-draft of this table showed the matcher far ahead of the baseline, but
-that gap was an artifact of the baseline reading the then-broken
-nearest-color tables. The interesting question, per the original
-research, is what these standings look like at 256 colors.
+chosen. The medium, not the matching, is the constraint. (An earlier
+draft of this table showed the matcher far ahead of the baseline; that
+gap was an artifact of the baseline reading the then-broken
+nearest-color tables.)
+
+And at 256 colors (`TestConverterArms/ansi256`):
+
+| image | quadrant dither (2×2) | glyph matcher (8×8) | mean-color blocks (8×8) |
+|---|---|---|---|
+| gray-gradient | 0.29 | 0.36 | 0.38 |
+| fleshtone | 3.97 | 10.82 | 11.06 |
+| color-ramp | 2.70 | 7.77 | 8.09 |
+| fox | 3.81 | 9.18 | 9.77 |
+| mandrill | 3.52 | 5.57 | 7.17 |
+| wheel | 2.40 | 11.39 | 11.47 |
+
+This **refines** the original lab's "256 colors largely close the gap"
+finding rather than confirming it. Under the blurred-ΔE referee,
+256 colors improve everything 3–4×, and the matcher's advantage over
+flat blocks grows where there is texture (mandrill −22% vs −8% at 16
+colors) — but the quadrant dither improves even faster, so the
+*relative* gap to 2×2 widens (mandrill ratio 1.37→1.58, fox
+2.22→2.41). Error diffusion exploits a finer palette better than
+per-cell color pairs can. The old conclusion was a visual judgment
+made without a quantitative referee: both arms improving 3× reads as
+"the gap closed" to the eye. Two caveats keep the door open for
+glyphs: the matcher has no error diffusion of its own, and a
+tone-oriented metric structurally favors diffusion — a
+structure-sensitive metric, or the hybrid below, may read differently.
 
 ## Where the matching should go next
 
-1. **256 colors.** The original research found 256 colors rescue 8×8
-   matching. The matcher is palette-agnostic — run the harness with
-   `ansi256` and see whether the gap to the quadrant dither closes.
-2. **Hybrid cells.** Glyph matching where structure is high and color
+1. **Hybrid cells.** Glyph matching where structure is high and color
    variance low (line art, edges); 2×2 quadrant dithering elsewhere.
    The `edges` argument of `Convert` is currently unused — it is the
-   natural input for the mode decision.
-3. **More fonts via ROM dumps.** `LoadROMFont` accepts the classic
+   natural input for the mode decision. The 256-color standings make
+   this the live question: the matcher's wins are localized to
+   texture/structure, exactly where a hybrid would deploy it.
+2. **Error diffusion for the matcher.** The dither's widening lead at
+   256 colors is diffusion exploiting the finer palette. Diffusing each
+   cell's residual (against its rendered glyph) into neighboring cells
+   would give the matcher the same lever.
+3. **A structure-sensitive referee.** Blurred ΔE measures tone; glyph
+   matching's pitch is structure. An SSIM-like arm in the harness would
+   test whether the matcher preserves edges better than the numbers
+   above can show.
+4. **More fonts via ROM dumps.** `LoadROMFont` accepts the classic
    2048-byte CP437 format directly — bit-perfect, no rasterization, and
    covers the PETSCII/ATASCII/DOS font family this research targets.
 
