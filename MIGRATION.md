@@ -95,6 +95,17 @@ r := img2ansi.NewRenderer(
 )
 ```
 
+To dither for an arbitrary font, derive the pattern alphabet from the
+glyphs the font genuinely provides (the general form of BBS mode):
+
+```go
+font, _ := img2ansi.LoadEmbeddedFont("pxplus_ibm_bios")
+r := img2ansi.NewRenderer(
+    img2ansi.WithBlocksFromFont(font),  // Blocks ∩ font
+    img2ansi.WithPalette("ansi16"),
+)
+```
+
 ## Custom Mid-Pipeline Processing
 
 If you need to modify the image after resizing but before edge detection (e.g., overlaying rivers, annotations), use the split pipeline functions:

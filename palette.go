@@ -150,16 +150,51 @@ func ComputeTables(colorData AnsiData, method ColorDistanceMethod) ComputedTable
 		colorArr[idx] = rgbFromUint32(entry.Key)
 		colorTable[rgbFromUint32(entry.Key)] = uint32(idx)
 	}
-	maxDepth := int(math.Log2(float64(len(colorArr))) + 1)
-	kdTree := buildKDTree(colorArr, 0, maxDepth)
+	kdTree := buildKDTree(colorArr)
 
-	for r := 0; r < 256; r++ {
-		for g := 0; g < 256; g++ {
-			for b := 0; b < 256; b++ {
-				rgb := RGB{uint8(r), uint8(g), uint8(b)}
-				closest, _ := kdTree.nearestNeighbor(
-					rgb, kdTree.Color, math.MaxFloat64, 0, method)
-				closestColorArr[r<<16|g<<8|b] = closest
+	// Every table entry is found by exact linear scan over the palette,
+	// not tree search: the table is the product and must be exact.
+	// (Tables shipped before this change were built through a KD-tree
+	// traversal whose pruning bugs poisoned entries — ansi16 mapped pure
+	// black to #555555 under all three methods.) Palettes are at most a
+	// few hundred colors, so the scan is affordable for an offline
+	// build. LAB gets a fast path that converts each color exactly once.
+	if _, isLab := method.(LABMethod); isLab {
+		palLab := make([]LAB, len(colorArr))
+		for i, c := range colorArr {
+			palLab[i] = c.toLab()
+		}
+		for r := 0; r < 256; r++ {
+			for g := 0; g < 256; g++ {
+				for b := 0; b < 256; b++ {
+					rgb := RGB{uint8(r), uint8(g), uint8(b)}
+					t := rgb.toLab()
+					bestIdx, bestDist := 0, math.MaxFloat64
+					for i, p := range palLab {
+						dl := t.L - p.L
+						da := t.A - p.A
+						db := t.B - p.B
+						if d := dl*dl + da*da + db*db; d < bestDist {
+							bestIdx, bestDist = i, d
+						}
+					}
+					closestColorArr[r<<16|g<<8|b] = colorArr[bestIdx]
+				}
+			}
+		}
+	} else {
+		for r := 0; r < 256; r++ {
+			for g := 0; g < 256; g++ {
+				for b := 0; b < 256; b++ {
+					rgb := RGB{uint8(r), uint8(g), uint8(b)}
+					best, bestDist := colorArr[0], method.Distance(rgb, colorArr[0])
+					for _, c := range colorArr[1:] {
+						if d := method.Distance(rgb, c); d < bestDist {
+							best, bestDist = c, d
+						}
+					}
+					closestColorArr[r<<16|g<<8|b] = best
+				}
 			}
 		}
 	}
@@ -188,8 +223,7 @@ func ComputeTablesForKdSearch(colorData AnsiData) ComputedTables {
 		colorArr[idx] = rgbFromUint32(entry.Key)
 		colorTable[rgbFromUint32(entry.Key)] = uint32(idx)
 	}
-	maxDepth := int(math.Log2(float64(len(colorArr))) + 1)
-	kdTree := buildKDTree(colorArr, 0, maxDepth)
+	kdTree := buildKDTree(colorArr)
 
 	return ComputedTables{
 		ColorArr:        &colorArr,
@@ -321,7 +355,6 @@ func (cct CompactComputedTables) Restore() ComputedTables {
 		KdTree:          kdTree,
 	}
 }
-
 
 // Old global-based palette loading functions (LoadPalette, LoadPaletteBinary,
 // LoadPaletteJSON, ComputeDistinctColors, LookupClosestColor, GetPaletteColors,

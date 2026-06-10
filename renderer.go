@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -54,9 +55,9 @@ type Renderer struct {
 	lookupMisses int
 
 	// Stats (private)
-	beginInitTime       time.Time
-	bestBlockTime       time.Duration
-	usingPrecomputed    bool // true if using precomputed tables, false if KD-tree fallback
+	beginInitTime    time.Time
+	bestBlockTime    time.Duration
+	usingPrecomputed bool // true if using precomputed tables, false if KD-tree fallback
 }
 
 // RendererOption is a functional option for configuring a Renderer.
@@ -160,6 +161,27 @@ func WithBBSMode() RendererOption {
 func WithICEColors() RendererOption {
 	return func(r *Renderer) {
 		r.ICEColors = true
+	}
+}
+
+// WithBlocksFromFont restricts the dither's pattern alphabet to the
+// quadrant blocks the font genuinely provides (Blocks ∩ font). This is
+// the general form of WithBBSMode: derived from a CP437 font it yields
+// exactly the BBSBlocks set. Synthesized glyphs do not count — the
+// search space must match what the target medium can display, not what
+// a preview renderer can draw. If the font provides none of the 16
+// patterns, the alphabet is left unchanged.
+func WithBlocksFromFont(fb *FontBitmaps) RendererOption {
+	return func(r *Renderer) {
+		var derived []blockDef
+		for _, b := range Blocks {
+			if _, ok := fb.GenuineGlyph(b.Rune); ok {
+				derived = append(derived, b)
+			}
+		}
+		if len(derived) > 0 {
+			r.blocks = derived
+		}
 	}
 }
 
@@ -336,6 +358,19 @@ func (r *Renderer) loadPaletteJSON(path string, fastMode bool) (*ComputedTables,
 	}
 
 	return &fgComputedTable, &bgComputedTable, nil
+}
+
+// nearestFgColor maps a color to the nearest foreground palette color,
+// via the precomputed table when available, KD-tree search otherwise.
+// Both are exact: tables are built by linear scan, and the tree search
+// is validated against a linear-scan oracle in kdtree_test.go.
+func (r *Renderer) nearestFgColor(c RGB) RGB {
+	if r.fgClosestColor != nil {
+		return (*r.fgClosestColor)[c.toUint32()]
+	}
+	nearest, _ := r.fgTree.nearestNeighbor(
+		c, r.fgTree.Color, math.MaxFloat64, 0, r.ColorMethod)
+	return nearest
 }
 
 // CacheStats returns cache hit/miss statistics.

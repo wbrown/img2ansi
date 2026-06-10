@@ -15,14 +15,18 @@ go build ./cmd/ansify
 # Build compute_tables utility (for precomputing color tables)
 go build ./cmd/compute_tables
 
-# Build compute_fonts utility (for font analysis)
-go build ./cmd/compute_fonts
+# Build compute_glyphs utility (font glyph extraction for research)
+cd cmd/compute_glyphs && go build .
 
 # Run all tests
 go test ./...
 
 # Run tests with verbose output
 go test -v ./...
+
+# The tree must be gofmt-clean; this must print nothing.
+# Run it before committing.
+gofmt -l .
 ```
 
 ## Dependencies
@@ -370,70 +374,103 @@ edges := imageutil.DetectEdges(resized)                  // Edge detection after
 
 ## Active Research: Font-Agnostic Rendering
 
-The `cmd/compute_fonts/` directory contains active research into font-agnostic image rendering. If you're working on or interested in this research, you should read:
+Glyph matching research (8x8 character cells instead of 2x2 quadrant
+blocks) now lives on `main`:
 
-- `cmd/compute_fonts/CLAUDE.md`: Overview of the research lab and latest findings
-- `cmd/compute_fonts/EXPERIMENT_GUIDE.md`: Guide to running experiments
-- `cmd/compute_fonts/GLYPH_MATCHING_EXPERIMENTS.md`: Detailed experimental results and analysis
+- `docs/glyph-research/README.md`: Lab overview — current status, the
+  rasterization-calibration story, and the roadmap. **Read this first.**
+- `docs/glyph-research/GLYPH_MATCHING_EXPERIMENTS.md`: The detailed
+  experiment log from the original `font-analysis` research branch.
+- `glyph.go` / `cp437.go`: `GlyphBitmap` infrastructure, `.glyphs` and
+  ROM font loading, font-based rendering of `BlockRune` output, and
+  font-derived dither alphabets (`WithBlocksFromFont` = Blocks ∩ font;
+  the general form of `WithBBSMode`, whose `BBSBlocks` is exactly the
+  CP437 derivation). Alphabet derivation uses `GenuineGlyph`, never
+  `GetGlyph` — synthesized glyphs render previews, they do not expand a
+  target's alphabet.
+- `converter.go`: `BlockConverter` — the slot a glyph matcher implements
+  (`Convert` + `SourcePixelsPerCell`). The `Renderer` is the reference
+  implementation; the harness scores any set of converters on a common
+  cell grid against the same reference (see Measuring Diffusion
+  Quality), with an 8×8 mean-color baseline as the floor to beat.
+- `cmd/compute_glyphs/`: Glyph extraction tool with self-calibrating
+  TTF rasterization (keeps the freetype dependency out of the library).
+
+The historical experiment code (the multi-factor similarity scorer,
+color selector experiments) remains on the `font-analysis` branch; the
+similarity scorer was deliberately not ported — see the lab README for
+the ideal-mask/popcount formulation that should replace it.
 
 Key findings so far:
-- 2×2 blocks still outperform 8×8 character matching
-- 256 colors dramatically improve quality over 16 colors
-- Simple heuristics (DominantColorSelector) are already near-optimal
-- The constraint is the medium (limited characters) not the algorithms
+- The 2×2-vs-8×8 question decomposes into two factors, and the harness
+  carries a diffusion-ablated control arm to keep them apart.
+  **Representation**: 2×2 quadrants and exhaustive 8×8 glyph matching
+  are near parity — the matcher ties or wins on most images at 256
+  colors, consistent with the original research. **Diffusion**: worth
+  2–4× on the blurred-ΔE metric, growing with palette size, and the
+  full dither's entire practical lead — the matcher does not have it
+  yet. See the standings tables in `docs/glyph-research/README.md`.
+- Simple heuristics (DominantColorSelector) are near-optimal at 256
+  colors — validated by true exhaustive search. The constraint is the
+  medium, not the algorithms.
+- The most promising direction is hybrid cells: glyphs for high-detail
+  low-color regions, quadrant dithering elsewhere, refereed by the
+  blurred-LAB harness in `diffusion_quality_test.go`.
 
-## Glyph Matching Research Status
+### Glyph Bitmaps: Hard-Won Lessons
 
-The `cmd/compute_fonts/` directory contains ongoing research into glyph matching that could potentially upgrade from 2x2 blocks to 8x8 character matching. While initial results show 2x2 blocks still outperform 8x8, the research continues:
+1. **One canonical bit ordering.** Three incompatible orderings
+   coexisted in early implementations. The layout is row-major, LSB =
+   top-left (bit `y*8+x` = pixel `(x,y)`), implemented only in
+   `GlyphBitmap.Bit`/`SetBit` and locked by `TestGlyphBitmapOrdering`.
+   ROM dumps are MSB-left per row; only `LoadROMFont` does that swap.
 
-### How the Glyph System Works
+2. **Never trust font metrics at 8px — calibrate.** Rasterizing the TTF
+   recreation with metrics-derived baselines can pass blunt checks while
+   being wrong: a half-pixel baseline error still renders '█' and '▀'
+   perfectly (their edges sit on cell boundaries) yet smears every
+   single-pixel stroke across two rows. `compute_glyphs` searches
+   (ppem, baseline, x-offset) for zero coverage *ambiguity* — on the
+   design grid every cell is ~0% or ~100% inked. Its `-compare` flag
+   verifies regeneration is bit-identical to the embedded data.
 
-1. **Analyzes font glyphs** as 8x8 bitmaps (64-bit integers)
-2. **Extracts features** from each glyph:
-   - Pixel weight (filled pixel count)
-   - Zone weights (4x4 zones)
-   - Edge maps and diagonal line detection
-3. **Matches image blocks to characters** using:
-   - 70% shape similarity
-   - 20% pattern similarity
-   - 10% density similarity
-4. **Optimizations**:
-   - Pre-built lookup tables by zone weights
-   - Special handling for diagonal characters (/, \)
-   - Font safety checks (characters must exist in fallback font)
+3. **Font quirks are real, not bugs.** Two independent rasterization
+   approaches produce bit-identical glyphs, confirming: '|' genuinely
+   has a gap at row 3 (CP437 broken-bar tradition), '+' genuinely sits
+   left of center (column 7 is the spacing column). "Obvious" matches
+   may not work as expected — that is the font, not the loader.
 
-This will provide:
-- **4x higher resolution** (8x8 vs 2x2 pixels per character)
-- **Thousands of characters** instead of just 16 block elements
-- **Better visual quality** through intelligent character selection
+4. **A font cannot say no — check coverage explicitly.** `DrawString`
+   renders the missing-glyph box for unmapped runes (an inverse '?' in
+   PxPlus IBM BIOS). 89 runes of the research set — including all 10
+   quadrant-only blocks the dither emits — were once embedded as
+   identical '?' boxes that `GetGlyph` reported as present, drawing
+   question marks all over rendered output. `compute_glyphs` now skips
+   unmapped runes, the library synthesizes the 16 geometric quadrant
+   blocks when absent (`synthesizeBlockGlyphs`), and
+   `TestBlockGlyphsCoverDitherOutput` pins all 16 dither runes to their
+   exact quadrant geometry.
 
-Example: Instead of using '▀' for a horizontal line, it could use '─' or '═' for cleaner appearance.
+5. **The matcher exists but is not wired into the CLI.**
+   `GlyphMatcher` (`glyphmatch.go`) implements the ideal-mask +
+   weighted-Hamming (XOR/popcount) search as a `BlockConverter` — it
+   replaced the retired 70/20/10 similarity scorer, and
+   `TestGlyphMatcherExactGlyph` pins exact glyph reproduction. The
+   harness scores it against the quadrant dither and the mean-color
+   floor (`TestConverterArms`); at 16 colors the quadrant dither still
+   wins everywhere, per the original research. No output path emits
+   glyph-matched ANSI yet.
 
-### Critical Bug Fix (Fixed in commit after initial development)
-
-The glyph matching system had a **critical bit ordering bug** that made it non-functional:
-- `analyzeGlyph()` used reversed bit ordering: `(GlyphHeight-1-y)*GlyphWidth + (GlyphWidth-1-x)`
-- `getBit()` used standard ordering: `y*GlyphWidth + x`
-- `String()` used yet another scheme: `63-y*GlyphWidth-x`
-
-**Fix**: All three methods now use consistent row-major ordering: `y*GlyphWidth + x`
-
-### Important Notes on Glyph Matching
-
-1. **Font Quirks**: The IBM BIOS font has limitations:
-   - '|' character has a gap in the middle (row 3 is empty)
-   - '+' is offset to the left, not centered
-   - Many characters don't use the full 8x8 grid
-   - This means "obvious" matches may not work as expected
-
-2. **Testing**: The system includes comprehensive bitmap tests in `bitmap_consistency_test.go` to ensure bit ordering remains consistent
-
-3. **Not Integrated**: The glyph matching system exists but is not connected to the main img2ansi converter - it's a separate tool for analysis
-
-4. **Computational Complexity**: Going from 2x2 to 8x8 blocks would increase computation by ~40x:
-   - 16 patterns → 700+ characters
-   - 4 pixels → 64 pixels per block  
-   - Current optimizations (zones, caching) don't scale well to this complexity
+6. **The nearest-color machinery shipped broken for years (fixed).**
+   `buildKDTree` dropped colors via a depth cap (the ansi16 tree had 15
+   of 16 colors — pure black missing), and `nearestNeighbor` searched
+   with the wrong axes, wrapping uint8 arithmetic, and unit-mismatched
+   pruning; every embedded table mapped pure black to `#555555`. Found
+   through the glyph matcher's anchor probe. Tables are now built by
+   exact linear scan, the tree search is validated against a
+   linear-scan oracle (`kdtree_test.go`), and all `.palette` files were
+   regenerated. See `docs/glyph-research/README.md` for the full
+   anatomy.
 
 ## Critical Implementation Notes
 
@@ -502,6 +539,14 @@ output back to pixels and scores it against the pre-dither reference:
 - Arms: `no-diffusion` (per-block quantization) vs `diffusion`.
 - `TestDiffusionQualityPhotos` runs against any PNGs in `images/`
   (not committed); set `DIFFUSION_PNGS=<dir>` to dump comparison renders.
+
+The cross-converter harness (`measureConverterArms`,
+`TestConverterArms`) generalizes this to any `BlockConverter`: each
+arm's input is prepared at its native source resolution for the same
+cell grid, outputs are rendered at a common 8 px/cell (quadrant
+geometry or font glyphs), and blur sigma is expressed in cell widths so
+scores are comparable across converters. This is how glyph matchers get
+scored against the quadrant dither.
 
 ### Terminal Color Palette Variations
 

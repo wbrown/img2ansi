@@ -3,6 +3,8 @@ package img2ansi
 import (
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	"math"
 	"os"
 	"path/filepath"
@@ -26,8 +28,15 @@ import (
 // renderBlocksToImage renders a BlockRune grid at native resolution
 // (2x2 pixels per block) using the quadrant table as ground truth.
 func renderBlocksToImage(blocks [][]BlockRune) *imageutil.RGBAImage {
+	return renderBlocksToImageScaled(blocks, 2)
+}
+
+// renderBlocksToImageScaled renders a BlockRune grid via the quadrant
+// table at pxPerCell pixels per cell edge (must be even).
+func renderBlocksToImageScaled(blocks [][]BlockRune, pxPerCell int) *imageutil.RGBAImage {
 	height, width := len(blocks), len(blocks[0])
-	out := imageutil.NewRGBAImage(width*2, height*2)
+	half := pxPerCell / 2
+	out := imageutil.NewRGBAImage(width*pxPerCell, height*pxPerCell)
 	for by, row := range blocks {
 		for bx, block := range row {
 			quad := getQuadrantsForRune(block.Rune)
@@ -40,8 +49,14 @@ func renderBlocksToImage(blocks [][]BlockRune) *imageutil.RGBAImage {
 				if filled {
 					c = block.FG
 				}
-				out.SetRGB(bx*2+i%2, by*2+i/2,
-					imageutil.RGB{R: c.R, G: c.G, B: c.B})
+				baseX := bx*pxPerCell + (i%2)*half
+				baseY := by*pxPerCell + (i/2)*half
+				for y := 0; y < half; y++ {
+					for x := 0; x < half; x++ {
+						out.SetRGB(baseX+x, baseY+y,
+							imageutil.RGB{R: c.R, G: c.G, B: c.B})
+					}
+				}
 			}
 		}
 	}
@@ -307,6 +322,298 @@ func makeColorRamp(width, height int) *imageutil.RGBAImage {
 	return img
 }
 
+// --- Cross-converter harness -------------------------------------------
+//
+// Any BlockConverter can be scored against any other on the same cell
+// grid: each arm's input is prepared at its native source resolution
+// (SourcePixelsPerCell), its output rendered back to pixels at a common
+// scoring resolution, and all arms compared against the same reference.
+
+// scorePxPerCell is the common resolution converter arms are scored at:
+// every arm's output is rendered at 8 px per cell and compared against
+// a reference prepared at the same size.
+const scorePxPerCell = GlyphWidth
+
+// converterArm pairs a BlockConverter with a renderer that turns its
+// output back into pixels at scorePxPerCell for scoring.
+type converterArm struct {
+	name   string
+	conv   BlockConverter
+	render func([][]BlockRune) *imageutil.RGBAImage
+}
+
+// quadrantArm scores a Renderer's quadrant dither, rendered via the
+// quadrant geometry table.
+func quadrantArm(name string, r *Renderer) converterArm {
+	return converterArm{
+		name: name,
+		conv: r,
+		render: func(blocks [][]BlockRune) *imageutil.RGBAImage {
+			return renderBlocksToImageScaled(blocks, scorePxPerCell)
+		},
+	}
+}
+
+// fontArm scores a converter whose output is rendered through font
+// glyph bitmaps.
+func fontArm(name string, conv BlockConverter, font *FontBitmaps) converterArm {
+	return converterArm{
+		name: name,
+		conv: conv,
+		render: func(blocks [][]BlockRune) *imageutil.RGBAImage {
+			return imageutil.RGBAImageFromImage(
+				font.RenderBlocks(blocks, scorePxPerCell/GlyphWidth))
+		},
+	}
+}
+
+// imageSource produces the source content at a requested pixel size,
+// with its edge map. Synthetic patterns regenerate analytically so each
+// arm sees the same content at its native resolution; photos go through
+// the standard prepare pipeline.
+type imageSource func(pxW, pxH int) (*imageutil.RGBAImage, *imageutil.GrayImage)
+
+func syntheticSource(gen func(w, h int) *imageutil.RGBAImage) imageSource {
+	return func(pxW, pxH int) (*imageutil.RGBAImage, *imageutil.GrayImage) {
+		return gen(pxW, pxH), imageutil.NewGrayImage(pxW, pxH)
+	}
+}
+
+func photoSource(img *imageutil.RGBAImage) imageSource {
+	return func(pxW, pxH int) (*imageutil.RGBAImage, *imageutil.GrayImage) {
+		return imageutil.PrepareForANSI(img, pxW/2, pxH/2)
+	}
+}
+
+// measureConverterArms runs each converter over the same cell grid and
+// scores every arm against the same reference at scorePxPerCell. Blur
+// sigma is expressed in cell widths so the metric is comparable across
+// converters regardless of their source resolution. With DIFFUSION_PNGS
+// set, a labeled side-by-side comparison image (reference plus every
+// arm) is written alongside the per-arm renders.
+func measureConverterArms(
+	t *testing.T,
+	name string,
+	src imageSource,
+	cellsW, cellsH int,
+	arms []converterArm,
+) map[string]float64 {
+	t.Helper()
+	reference, _ := src(cellsW*scorePxPerCell, cellsH*scorePxPerCell)
+
+	labels := []string{"reference"}
+	panels := []*imageutil.RGBAImage{reference}
+
+	results := make(map[string]float64)
+	for _, arm := range arms {
+		k := arm.conv.SourcePixelsPerCell()
+		input, edges := src(cellsW*k, cellsH*k)
+		blocks := arm.conv.Convert(input, edges)
+		rendered := arm.render(blocks)
+
+		halfCell := blurredLabError(rendered, reference, 0.5*scorePxPerCell)
+		oneCell := blurredLabError(rendered, reference, 1.0*scorePxPerCell)
+		results[arm.name] = oneCell
+		t.Logf("%-14s %-18s blurredΔE σ=0.5cell %6.2f  σ=1cell %6.2f",
+			name, arm.name, halfCell, oneCell)
+
+		labels = append(labels, fmt.Sprintf("%s dE=%.2f", arm.name, oneCell))
+		panels = append(panels, rendered)
+
+		if dir := os.Getenv("DIFFUSION_PNGS"); dir != "" {
+			path := filepath.Join(dir, fmt.Sprintf("%s_%s.png", name, arm.name))
+			if err := imageutil.SavePNG(rendered.RGBA, path); err != nil {
+				t.Logf("could not save %s: %v", path, err)
+			}
+		}
+	}
+
+	if dir := os.Getenv("DIFFUSION_PNGS"); dir != "" {
+		font, err := LoadEmbeddedFont("font8x8")
+		if err != nil {
+			t.Fatalf("loading label font: %v", err)
+		}
+		path := filepath.Join(dir, fmt.Sprintf("%s_compare.png", name))
+		if err := imageutil.SavePNG(composeComparison(font, labels, panels), path); err != nil {
+			t.Logf("could not save %s: %v", path, err)
+		}
+	}
+	return results
+}
+
+// composeComparison stacks labeled panels vertically into a single
+// comparison image. Labels are rendered through the font's own glyphs.
+func composeComparison(font *FontBitmaps, labels []string, panels []*imageutil.RGBAImage) *image.RGBA {
+	const gutter = 4
+	labelH := GlyphHeight
+
+	width, height := 0, gutter
+	for _, p := range panels {
+		if p.Width() > width {
+			width = p.Width()
+		}
+		height += labelH + 2 + p.Height() + gutter
+	}
+
+	dark := color.RGBA{24, 24, 24, 255}
+	out := image.NewRGBA(image.Rect(0, 0, width+2*gutter, height))
+	draw.Draw(out, out.Bounds(), &image.Uniform{dark}, image.Point{}, draw.Src)
+
+	y := gutter
+	for i, p := range panels {
+		row := make([]BlockRune, 0, len(labels[i]))
+		for _, ch := range labels[i] {
+			row = append(row, BlockRune{
+				Rune: ch,
+				FG:   RGB{255, 255, 255},
+				BG:   RGB{24, 24, 24},
+			})
+		}
+		lbl := font.RenderBlocks([][]BlockRune{row}, 1)
+		draw.Draw(out,
+			image.Rect(gutter, y, gutter+lbl.Bounds().Dx(), y+labelH),
+			lbl, image.Point{}, draw.Src)
+		y += labelH + 2
+
+		draw.Draw(out,
+			image.Rect(gutter, y, gutter+p.Width(), y+p.Height()),
+			p.RGBA, image.Point{}, draw.Src)
+		y += p.Height() + gutter
+	}
+	return out
+}
+
+// nearestFg maps a color to the nearest foreground palette color using
+// the renderer's tables.
+func nearestFg(r *Renderer, c RGB) RGB {
+	if r.fgClosestColor != nil {
+		return (*r.fgClosestColor)[c.toUint32()]
+	}
+	nearest, _ := r.fgTree.nearestNeighbor(
+		c, r.fgTree.Color, math.MaxFloat64, 0, r.ColorMethod)
+	return nearest
+}
+
+// noDiffusionQuadrant is the diffusion-ablated control arm: the same
+// per-block search as the quadrant dither with no error diffusion.
+// Against the glyph matcher (also undiffused) it isolates the
+// REPRESENTATION variable — 2x2 quadrants vs 8x8 glyphs — and against
+// the full dither it isolates diffusion. Without it, dither-vs-matcher
+// comparisons conflate the two.
+type noDiffusionQuadrant struct{ r *Renderer }
+
+func (n noDiffusionQuadrant) SourcePixelsPerCell() int { return 2 }
+
+func (n noDiffusionQuadrant) Convert(img *imageutil.RGBAImage, edges *imageutil.GrayImage) [][]BlockRune {
+	return ditherNoDiffusion(n.r, img, edges)
+}
+
+// meanColorConverter is the floor any 8x8 glyph matcher must beat: each
+// cell becomes a full block in the palette color nearest the cell mean.
+type meanColorConverter struct{ r *Renderer }
+
+func (m meanColorConverter) SourcePixelsPerCell() int { return GlyphWidth }
+
+func (m meanColorConverter) Convert(img *imageutil.RGBAImage, edges *imageutil.GrayImage) [][]BlockRune {
+	k := m.SourcePixelsPerCell()
+	cellsH, cellsW := img.Height()/k, img.Width()/k
+	out := make([][]BlockRune, cellsH)
+	for cy := range out {
+		out[cy] = make([]BlockRune, cellsW)
+		for cx := range out[cy] {
+			var rSum, gSum, bSum int
+			for y := 0; y < k; y++ {
+				for x := 0; x < k; x++ {
+					p := img.GetRGB(cx*k+x, cy*k+y)
+					rSum += int(p.R)
+					gSum += int(p.G)
+					bSum += int(p.B)
+				}
+			}
+			n := k * k
+			fg := nearestFg(m.r, RGB{
+				uint8(rSum / n), uint8(gSum / n), uint8(bSum / n)})
+			out[cy][cx] = BlockRune{Rune: '█', FG: fg, BG: fg}
+		}
+	}
+	return out
+}
+
+// TestConverterArms exercises the cross-converter harness end to end:
+// the quadrant dither, the glyph matcher, and an 8x8 full-block
+// mean-color baseline run on the same cell grid under both the ansi16
+// and ansi256 palettes, render through their own paths (quadrant table
+// vs font glyphs), and score against the same reference. The original
+// research found 256 colors rescue 8x8 matching; this is where that
+// claim is measured.
+func TestConverterArms(t *testing.T) {
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	patterns := []struct {
+		name           string
+		src            imageSource
+		cellsW, cellsH int
+	}{
+		{"gray-gradient", syntheticSource(makeGradient), 64, 16},
+		{"fleshtone", syntheticSource(makeFleshtone), 64, 16},
+		{"color-ramp", syntheticSource(makeColorRamp), 64, 32},
+	}
+
+	for _, pal := range []string{"ansi16", "ansi256"} {
+		t.Run(pal, func(t *testing.T) {
+			r := NewRenderer(WithPalette(pal))
+			arms := []converterArm{
+				quadrantArm("quadrant-dither", r),
+				{
+					name: "quadrant-no-diff",
+					conv: noDiffusionQuadrant{r},
+					render: func(blocks [][]BlockRune) *imageutil.RGBAImage {
+						return renderBlocksToImageScaled(blocks, scorePxPerCell)
+					},
+				},
+				fontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
+				fontArm("mean-color-block", meanColorConverter{r}, font),
+			}
+
+			for _, p := range patterns {
+				res := measureConverterArms(t, p.name+"-"+pal,
+					p.src, p.cellsW, p.cellsH, arms)
+				if res["quadrant-dither"] >= res["mean-color-block"] {
+					t.Errorf("%s/%s: quadrant dither (ΔE %.2f) should beat the mean-color baseline (ΔE %.2f)",
+						p.name, pal, res["quadrant-dither"], res["mean-color-block"])
+				}
+				// The flat block is inside the matcher's search space
+				// (the cell-mean anchor guarantees it), so exhaustive
+				// matching can never be meaningfully worse than the
+				// mean-color baseline. Whether it does much BETTER is
+				// palette-dependent: one (fg, bg) pair per 8x8 cell
+				// cannot follow a gradient at 16 colors.
+				if res["glyph-matcher"] > res["mean-color-block"]*1.05 {
+					t.Errorf("%s/%s: glyph matcher (ΔE %.2f) should not lose to the mean-color baseline (ΔE %.2f)",
+						p.name, pal, res["glyph-matcher"], res["mean-color-block"])
+				}
+			}
+
+			photos, _ := filepath.Glob("images/*.png")
+			for _, path := range photos {
+				img, err := imageutil.LoadImage(path)
+				if err != nil {
+					continue
+				}
+				cellsW := 100
+				aspect := float64(img.Width()) / float64(img.Height())
+				cellsH := int(float64(cellsW) / aspect / 2.0)
+				name := filepath.Base(path)
+				measureConverterArms(t, name[:len(name)-len(".png")]+"-"+pal,
+					photoSource(img), cellsW, cellsH, arms)
+			}
+		})
+	}
+}
+
 func TestDiffusionQualityGradients(t *testing.T) {
 	r := NewRenderer(WithPalette("ansi16"))
 
@@ -331,6 +638,60 @@ func TestDiffusionQualityGradients(t *testing.T) {
 			t.Errorf("%s: diffusion (ΔE=%.2f) should beat no-diffusion (ΔE=%.2f) on blurred σ2 error",
 				p.name, diff.labSigma2, noDiff.labSigma2)
 		}
+	}
+}
+
+// TestBlockAlphabetQuality measures what restricting the pattern
+// alphabet costs: the full 16-block set against the 6 CP437 blocks,
+// with an identical palette so only the alphabet differs. The full
+// alphabet searches a superset, so it must never be meaningfully worse.
+// Photos in images/ are included in the log when present.
+func TestBlockAlphabetQuality(t *testing.T) {
+	full := NewRenderer(WithPalette("ansi16"))
+	cp437 := NewRenderer(WithBBSMode(), WithPalette("ansi16"))
+
+	score := func(r *Renderer, img *imageutil.RGBAImage, edges *imageutil.GrayImage, ref *imageutil.RGBAImage) float64 {
+		blocks := r.BrownDitherForBlocks(img.Clone(), edges)
+		return blurredLabError(renderBlocksToImage(blocks), ref, 2)
+	}
+
+	measure := func(name string, img *imageutil.RGBAImage, edges *imageutil.GrayImage, assert bool) {
+		ref := img.Clone()
+		f := score(full, img, edges, ref)
+		c := score(cp437, img, edges, ref)
+		t.Logf("%-14s blurredΔE σ2: 16-block=%6.2f  6-block=%6.2f  (restriction cost %+.0f%%)",
+			name, f, c, (c/f-1)*100)
+		if assert && f > c*1.10 {
+			t.Errorf("%s: full alphabet (%.2f) should not be worse than restricted (%.2f)",
+				name, f, c)
+		}
+	}
+
+	patterns := []struct {
+		name string
+		img  *imageutil.RGBAImage
+	}{
+		{"gray-gradient", makeGradient(128, 32)},
+		{"fleshtone", makeFleshtone(128, 32)},
+		{"color-ramp", makeColorRamp(128, 64)},
+	}
+	for _, p := range patterns {
+		edges := imageutil.NewGrayImage(p.img.Width(), p.img.Height())
+		measure(p.name, p.img, edges, true)
+	}
+
+	photos, _ := filepath.Glob("images/*.png")
+	for _, path := range photos {
+		img, err := imageutil.LoadImage(path)
+		if err != nil {
+			continue
+		}
+		width := 100
+		aspect := float64(img.Width()) / float64(img.Height())
+		height := int(float64(width) / aspect / 2.0)
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		name := filepath.Base(path)
+		measure(name[:len(name)-len(".png")], resized, edges, false)
 	}
 }
 

@@ -15,7 +15,7 @@ func TestBlockSelection(t *testing.T) {
 	)
 
 	fmt.Println("Testing mixed color blocks:")
-	
+
 	// Test a block that should use brown
 	testBlocks := []struct {
 		name  string
@@ -88,7 +88,7 @@ func TestBlockSelection(t *testing.T) {
 	// Count how many times each color is used
 	fmt.Println("\nTesting color frequency in block selection:")
 	colorCounts := make(map[RGB]int)
-	
+
 	// Generate many random-ish blocks
 	for red := 0; red < 256; red += 32 {
 		for green := 0; green < 256; green += 32 {
@@ -106,7 +106,7 @@ func TestBlockSelection(t *testing.T) {
 			}
 		}
 	}
-	
+
 	fmt.Println("\nColor usage frequency:")
 	for color, count := range colorCounts {
 		if count > 0 {
