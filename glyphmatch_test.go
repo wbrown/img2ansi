@@ -158,6 +158,70 @@ func TestGlyphMatcherDiffusion(t *testing.T) {
 	}
 }
 
+// TestGlyphMatcherMultiCellRoundTrip: an image painted entirely from
+// font glyphs at cell-aligned positions must survive match -> render
+// pixel-perfectly at every cell position. This pins the registration
+// between matchCell's pixel indexing, the ideal-mask bit layout, and
+// FontBitmaps.RenderBlocks — any off-by-one in any of the three shows
+// up as mismatches at specific cells. (Written while diagnosing a
+// suspected rendering offset that turned out to be font typography:
+// letterform glyphs keep column 7 as spacing, which reads as a 1px
+// shift when they are used as dither texture on photos.)
+func TestGlyphMatcherMultiCellRoundTrip(t *testing.T) {
+	r := NewRenderer(WithPalette("ansi16"))
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	white := RGB{0xFF, 0xFF, 0xFF}
+	black := RGB{0x00, 0x00, 0x00}
+	runes := []rune{'X', 'O', '/', '╋', '▚', 'A', '#', '%'}
+
+	const cells = 8
+	img := imageutil.NewRGBAImage(cells*GlyphWidth, cells*GlyphHeight)
+	for cy := 0; cy < cells; cy++ {
+		for cx := 0; cx < cells; cx++ {
+			g, ok := font.GenuineGlyph(runes[(cx+cy)%len(runes)])
+			if !ok {
+				t.Fatalf("font8x8 missing %q", runes[(cx+cy)%len(runes)])
+			}
+			for y := 0; y < GlyphHeight; y++ {
+				for x := 0; x < GlyphWidth; x++ {
+					c := black
+					if g.Bit(x, y) {
+						c = white
+					}
+					img.SetRGB(cx*GlyphWidth+x, cy*GlyphHeight+y,
+						imageutil.RGB{R: c.R, G: c.G, B: c.B})
+				}
+			}
+		}
+	}
+
+	m := NewGlyphMatcher(r, font)
+	blocks := m.Convert(img.Clone(),
+		imageutil.NewGrayImage(cells*GlyphWidth, cells*GlyphHeight))
+	rendered := imageutil.RGBAImageFromImage(font.RenderBlocks(blocks, 1))
+
+	mismatches := 0
+	for y := 0; y < cells*GlyphHeight; y++ {
+		for x := 0; x < cells*GlyphWidth; x++ {
+			if img.GetRGB(x, y) != rendered.GetRGB(x, y) {
+				if mismatches < 5 {
+					t.Errorf("pixel (%d,%d) in cell (%d,%d) does not round-trip",
+						x, y, x/GlyphWidth, y/GlyphHeight)
+				}
+				mismatches++
+			}
+		}
+	}
+	if mismatches > 0 {
+		t.Errorf("%d mismatched pixels of %d", mismatches,
+			cells*cells*GlyphWidth*GlyphHeight)
+	}
+}
+
 // TestGlyphMatcherDeterministic guards the sorted-glyph and sorted-
 // anchor tie-breaking: identical input must produce identical output.
 func TestGlyphMatcherDeterministic(t *testing.T) {
