@@ -329,12 +329,17 @@ the blend-ladder objective is coverage-aware: it selects (glyph, fg,
 bg) whose area-weighted appearance matches the cell, where the 1-bit
 objective demands per-pixel mask agreement and so favors harsh
 ink-on-ground pairings. The glyph matcher now **beats the quadrant
-dither on the mandrill and the fox at both palettes**, and closes the
+dither on mandrill and fox at both palettes**, and closes the
 wheel gap to 1.1×. Visual verification: the gain is real texture/color
 selection, not metric-gaming — softer pairings, smoother fur, no
-smearing
-([comparisons/mandrill-ansi256_displaymatch.png](comparisons/mandrill-ansi256_displaymatch.png),
-[16-color version](comparisons/mandrill-ansi16_displaymatch.png)).
+smearing. Each `_displaymatch` composite shows reference /
+quadrant-dither / byte-matched / display-matched:
+[mandrill-ansi256](comparisons/mandrill-ansi256_displaymatch.png),
+[mandrill-ansi16](comparisons/mandrill-ansi16_displaymatch.png),
+[fox-ansi16](comparisons/fox-ansi16_displaymatch.png) (the new
+16-color win),
+[wheel-ansi16](comparisons/wheel-ansi16_displaymatch.png) (the
+dither's remaining win, kept for honesty).
 
 ### Which color metric — matching vs judging
 
