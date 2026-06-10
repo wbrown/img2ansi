@@ -201,7 +201,8 @@ common 8 px/cell (quadrant geometry or font glyphs), and every arm is
 scored against the same reference with blur sigma expressed in *cell
 widths*, so numbers are comparable across source resolutions. With
 `DIFFUSION_PNGS=<dir>` set, the harness writes a labeled side-by-side
-comparison image per test image (labels rendered through font8x8).
+comparison image per test image (labels rendered through font8x8);
+representative ones are committed under [comparisons/](comparisons/).
 
 ## The glyph matcher
 
