@@ -2,6 +2,7 @@ package img2ansi
 
 import (
 	"container/heap"
+	"math"
 	"sort"
 )
 
@@ -27,14 +28,19 @@ type ColorNode struct {
 //   - It handles the discrete nature of ANSI colors well by carefully
 //     managing axis splitting and duplicate color values.
 //
-// The function takes a list of colors, the current depth, and the maximum
-// depth of the tree as arguments, and returns the root node of the KD-tree.
-// The resulting tree structure allows for efficient nearest-neighbor
-// searches in the ANSI color space, crucial for mapping arbitrary RGB colors
-// to the closest ANSI representation.
-func buildKDTree(colors []RGB, depth int, maxDepth int) *ColorNode {
-	// Base case: stop recursion if we've reached max depth or have no colors
-	if len(colors) == 0 || depth >= maxDepth {
+// The function takes a list of colors and returns the root node of the
+// KD-tree. The resulting tree structure allows for efficient
+// nearest-neighbor searches in the ANSI color space, crucial for mapping
+// arbitrary RGB colors to the closest ANSI representation.
+//
+// Every input color becomes a node: median splitting consumes one element
+// per level, so recursion terminates on empty slices. (An earlier version
+// capped recursion at log2(n)+1, which silently DROPPED colors whenever
+// duplicate component values skewed the median — the ansi16 tree shipped
+// without pure black in it, so no search, however correct, could return
+// black. TestBuildKDTreeContainsAllColors pins this.)
+func buildKDTree(colors []RGB) *ColorNode {
+	if len(colors) == 0 {
 		return nil
 	}
 
@@ -75,8 +81,8 @@ func buildKDTree(colors []RGB, depth int, maxDepth int) *ColorNode {
 	// Using the median as split point generally creates a balanced tree
 	return &ColorNode{
 		Color:     colors[median],
-		Left:      buildKDTree(colors[:median], depth+1, maxDepth),
-		Right:     buildKDTree(colors[median+1:], depth+1, maxDepth),
+		Left:      buildKDTree(colors[:median]),
+		Right:     buildKDTree(colors[median+1:]),
 		SplitAxis: axis,
 	}
 }
@@ -181,42 +187,29 @@ func (node *ColorNode) nearestNeighbor(
 		bestDist = dist
 	}
 
-	axis := depth % 3
-	var next, other *ColorNode
-	switch axis {
-	case 0:
-		if target.R < node.Color.R {
-			next, other = node.Left, node.Right
-		} else {
-			next, other = node.Right, node.Left
-		}
-	case 1:
-		if target.G < node.Color.G {
-			next, other = node.Left, node.Right
-		} else {
-			next, other = node.Right, node.Left
-		}
-	default:
-		if target.B < node.Color.B {
-			next, other = node.Left, node.Right
-		} else {
-			next, other = node.Right, node.Left
-		}
+	// The tree is built on per-node largest-range axes, so the stored
+	// SplitAxis is authoritative. (An earlier version of this search
+	// walked with depth%3 axes, computed the plane distance with
+	// wrapping uint8 subtraction, and pruned squared-RGB units against
+	// linear method distances; the embedded tables built through it
+	// mapped pure black to #555555.)
+	axis := node.SplitAxis
+	targetComp := float64(getColorComponent(target, axis))
+	nodeComp := float64(getColorComponent(node.Color, axis))
+
+	next, other := node.Right, node.Left
+	if targetComp < nodeComp {
+		next, other = node.Left, node.Right
 	}
 
 	best, bestDist = next.nearestNeighbor(target, best, bestDist, depth+1, method)
 
-	// Check if we need to search the other branch
-	var axisDistance float64
-	switch axis {
-	case 0:
-		axisDistance = float64(target.R - node.Color.R)
-	case 1:
-		axisDistance = float64(target.G - node.Color.G)
-	default:
-		axisDistance = float64(target.B - node.Color.B)
-	}
-	if axisDistance*axisDistance < bestDist {
+	// Search the other branch unless every color beyond the splitting
+	// plane is provably farther than the best found. The plane distance
+	// is in RGB units; planePruneFactor converts it to a lower bound in
+	// the method's units (factor 0 = no safe bound, always search).
+	planeDist := math.Abs(targetComp - nodeComp)
+	if planeDist*planePruneFactor(method, axis) < bestDist {
 		best, bestDist = other.nearestNeighbor(
 			target, best, bestDist, depth+1, method)
 	}
@@ -224,8 +217,28 @@ func (node *ColorNode) nearestNeighbor(
 	return best, bestDist
 }
 
-// ColorDistance is a helper struct to keep track of colors and their
-// distances
+// planePruneFactor returns f such that f*|Δaxis| is a lower bound on
+// method.Distance between two colors differing by at least Δaxis on the
+// given RGB axis. RGBMethod is Euclidean in RGB, so the bound is exact.
+// Redmean's per-axis weights have known floors: (512+rmean)/256 ≥ 2 for
+// R, exactly 4 for G, (767-rmean)/256 ≥ 2 for B. LAB and custom methods
+// have no safe bound in RGB space, so they never prune — palettes are a
+// few hundred colors at most, making the full traversal cheap.
+func planePruneFactor(method ColorDistanceMethod, axis int) float64 {
+	switch method.(type) {
+	case RGBMethod:
+		return 1
+	case RedmeanMethod:
+		if axis == 1 {
+			return 2
+		}
+		return math.Sqrt2
+	default:
+		return 0
+	}
+}
+
+// ColorDistance pairs a color with its distance to a query point.
 type ColorDistance struct {
 	color    RGB
 	distance float64

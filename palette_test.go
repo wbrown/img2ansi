@@ -152,7 +152,8 @@ func compareKdTrees(original, deserialized *ColorNode) error {
 	return nil
 }
 
-// Helper function to use in your tests
+// CompareComputedTablesSerialization round-trips tables through the
+// compact serialization and reports any mismatch.
 func CompareComputedTablesSerialization(original *ComputedTables, method ColorDistanceMethod) error {
 	// Serialize
 	compact := CompactComputeTables(original.AnsiData, method)

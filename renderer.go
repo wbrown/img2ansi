@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -357,6 +358,19 @@ func (r *Renderer) loadPaletteJSON(path string, fastMode bool) (*ComputedTables,
 	}
 
 	return &fgComputedTable, &bgComputedTable, nil
+}
+
+// nearestFgColor maps a color to the nearest foreground palette color,
+// via the precomputed table when available, KD-tree search otherwise.
+// Both are exact: tables are built by linear scan, and the tree search
+// is validated against a linear-scan oracle in kdtree_test.go.
+func (r *Renderer) nearestFgColor(c RGB) RGB {
+	if r.fgClosestColor != nil {
+		return (*r.fgClosestColor)[c.toUint32()]
+	}
+	nearest, _ := r.fgTree.nearestNeighbor(
+		c, r.fgTree.Color, math.MaxFloat64, 0, r.ColorMethod)
+	return nearest
 }
 
 // CacheStats returns cache hit/miss statistics.
