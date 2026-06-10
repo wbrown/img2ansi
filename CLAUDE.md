@@ -687,10 +687,10 @@ Key findings so far:
   residuals diffuse as noise. **Display-aware matching**
   (`SetBeamSigma`: score candidates as their CRT'd appearance, born
   from the phosphor-glow insight) improves the matcher a further
-  10–30% and puts it ahead of the quadrant dither on the mandrill and
+  13–33% and puts it ahead of the quadrant dither on the mandrill and
   the fox at both palettes. All standings are measured under the
-  display-geometry chain (80×25 screen, 1:2.4 cells, 8×8 glyphs
-  scan-doubled to 8×16). See the standings tables in
+  display-geometry chain (width-first 80-column grids, 1:2.4 cells,
+  8×8 glyphs scan-doubled to 8×16). See the standings tables in
   `docs/glyph-research/README.md`.
 - Simple heuristics (DominantColorSelector) are near-optimal at 256
   colors — validated by true exhaustive search. The constraint is the
@@ -840,9 +840,10 @@ exercised by `TestConverterArms`) generalizes this to any
 resolution for the same cell grid, every arm's output renders through
 the display chain — 8×8 font glyphs (the quadrant dither's runes
 included; never idealized rectangles), scan-doubled to 8×16, stretched
-×1.2 to the 1:2.4 display cell aspect on an 80×25 target screen — and
-blur sigma is expressed in cell widths so scores are comparable across
-converters. This is how glyph matchers get scored against the quadrant
+×1.2 to the 1:2.4 display cell aspect — and blur sigma is expressed in
+cell widths so scores are comparable across converters. Photo grids
+are width-first (`FitGrid`): the full 80 columns, rows following the
+source aspect uncapped; synthetics use the 80×25 screen. This is how glyph matchers get scored against the quadrant
 dither.
 
 **Experiments that exceed the test budget run through `cmd/quality`,
@@ -850,7 +851,7 @@ never through ad-hoc copies of harness code.** The tool drives the same
 exported harness functions the tests use (method sweeps, alphabet
 ladders, CRT-scored arms, comparison composites), so its numbers and
 the tests' numbers are the same numbers. The cell that motivates it:
-a LAB-matched ansi256 dither run takes ~12 minutes, which no test can
+a LAB-matched ansi256 dither run takes ~20 minutes, which no test can
 hold. Writing a one-off runner with a pasted copy of the scoring
 pipeline is a constitution violation — extend `cmd/quality` or
 `harness.go` instead.
@@ -861,7 +862,7 @@ and search distances use the `Renderer` default, **Redmean** — every
 standings number in the research docs was matched with Redmean unless
 explicitly labeled. The SCORING referee (`BlurredLabError`) judges in
 **LAB ΔE**. Matching in LAB to align objective with referee is worth a
-further 9–17% (see the color-metric table in
+further 11–23% (see the color-metric table in
 `docs/glyph-research/README.md`); the trade-off is that LAB's
 `Distance` converts both colors per call, making LAB matching at 256
 colors roughly an order of magnitude slower than Redmean (a

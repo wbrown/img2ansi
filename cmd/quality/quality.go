@@ -7,7 +7,7 @@
 // numbers are the same numbers.
 //
 // The cells that motivate it are the ones a test cannot hold: a
-// LAB-matched ansi256 dither run takes ~12 minutes alone. Examples:
+// LAB-matched ansi256 dither run takes ~20 minutes alone. Examples:
 //
 //	# the slow color-method cell
 //	quality -images ../../images/mandrill.png -palettes ansi256 \

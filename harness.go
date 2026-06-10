@@ -25,15 +25,16 @@ import (
 // average tone match the source, and the blur exposes exactly that;
 // unblurred MSE penalizes the dither pattern itself and rewards banding.
 //
-// Display geometry: the harness targets the canonical 80x25 text
-// screen. On a 4:3 CRT the 80-column modes displayed cells at ~1:2.4
-// (CGA 640x200: 8x8 glyphs at 1:2.4 pixel aspect; VGA 720x400: 9x16
-// cells at 0.74 width units — both land on 1:2.4). The chain modeled
-// here: every cell renders as its 8x8 font glyph, scan-doubled to 8x16
-// (VGA 400-line behavior), then the CRT's 4:3 geometry adds the
-// remaining x1.2 vertical stretch, for 1:2.4 displayed cells. Rendered
-// output and reference therefore share the source image's true aspect —
-// nothing is squashed.
+// Display geometry: the harness renders for the canonical 80-column
+// text screen. On a 4:3 CRT the 80-column modes displayed cells at
+// ~1:2.4 (CGA 640x200: 8x8 glyphs at 1:2.4 pixel aspect; VGA 720x400:
+// 9x16 cells at 0.74 width units — both land on 1:2.4). The chain
+// modeled here: every cell renders as its 8x8 font glyph, scan-doubled
+// to 8x16 (VGA 400-line behavior), then the CRT's 4:3 geometry adds
+// the remaining x1.2 vertical stretch, for 1:2.4 displayed cells.
+// Photos size width-first to the full 80 columns (FitGrid); synthetic
+// patterns use the 80x25 screen. Rendered output and reference share
+// the source image's true aspect — nothing is squashed.
 
 // gaussianBlurPlanes applies a separable Gaussian blur to an image,
 // returning per-pixel RGB float triples (edge pixels use clamped sampling).
@@ -139,23 +140,17 @@ const (
 	crtStretch = displayCellAspect / 2
 )
 
-// FitGrid fits an image of the given aspect (w/h) inside the 80x25
-// screen under the 1:2.4 display cell aspect.
+// FitGrid sizes a source image's cell grid width-first, like the CLI:
+// every image gets the full 80 columns, and rows follow the source
+// aspect under the 1:2.4 display cell aspect, uncapped — portrait
+// content renders taller than one 25-row screen and scrolls, exactly
+// as a terminal would show it. (The 80x25 screen remains the target
+// for synthetic patterns, which have no native aspect of their own.)
 func FitGrid(aspect float64) (cols, rows int) {
 	cols = targetCols
 	rows = int(math.Round(float64(cols) / (aspect * displayCellAspect)))
-	if rows > targetRows {
-		rows = targetRows
-		cols = int(math.Round(float64(rows) * displayCellAspect * aspect))
-		if cols > targetCols {
-			cols = targetCols
-		}
-	}
 	if rows < 1 {
 		rows = 1
-	}
-	if cols < 1 {
-		cols = 1
 	}
 	return cols, rows
 }

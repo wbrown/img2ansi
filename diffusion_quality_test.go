@@ -325,9 +325,9 @@ func (m meanColorConverter) Convert(img *imageutil.RGBAImage, edges *imageutil.G
 // mean-color baseline run on the same cell grid under both the ansi16
 // and ansi256 palettes, all rendered through font glyphs and the
 // display chain (the quadrant runes are font glyphs like any others),
-// and scored against the same reference. Photos fit the canonical
-// 80x25 screen at the 1:2.4 display cell aspect; synthetics use the
-// full screen.
+// and scored against the same reference. Photos size width-first to
+// the full 80 columns, rows following the source aspect (FitGrid);
+// synthetics use the 80x25 screen.
 func TestConverterArms(t *testing.T) {
 	font, err := LoadEmbeddedFont("font8x8")
 	if err != nil {
