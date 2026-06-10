@@ -25,6 +25,10 @@ type Renderer struct {
 	CacheThreshold float64
 	ColorMethod    ColorDistanceMethod
 
+	// Block set used by the search (Blocks by default, BBSBlocks in BBS mode)
+	blocks    []blockDef
+	ICEColors bool
+
 	// Palette state (private)
 	palettePath   string
 	paletteLoaded bool
@@ -71,6 +75,7 @@ func NewRenderer(opts ...RendererOption) *Renderer {
 		KdSearch:       0, // Use precomputed tables by default
 		CacheThreshold: 200.0,
 		ColorMethod:    RedmeanMethod{},
+		blocks:         Blocks,
 
 		// Initialize maps and cache
 		fgAnsiRev:     make(map[string]uint32),
@@ -135,6 +140,26 @@ func WithMaxChars(max int) RendererOption {
 func WithTargetWidth(width int) RendererOption {
 	return func(r *Renderer) {
 		r.TargetWidth = width
+	}
+}
+
+// WithBBSMode restricts the block set to the 6 CP437-compatible block
+// characters for BBS output. Pair it with the "ansi16bbs" palette, which
+// limits the search to the 8 background colors a BBS can display, or
+// with "ansi16" plus WithICEColors when the target viewer supports iCE.
+func WithBBSMode() RendererOption {
+	return func(r *Renderer) {
+		r.blocks = BBSBlocks
+	}
+}
+
+// WithICEColors enables iCE colors for BBS output: bright backgrounds
+// are emitted as blink plus the standard color ("5;4x"), giving 16
+// background colors on viewers that support iCE (SyncTERM, PabloDraw).
+// Viewers without iCE support will blink instead.
+func WithICEColors() RendererOption {
+	return func(r *Renderer) {
+		r.ICEColors = true
 	}
 }
 

@@ -70,10 +70,28 @@ compressed := r.CompressANSI(ansi)
 
 ```go
 r := img2ansi.NewRenderer(
-    img2ansi.WithPalette("ansi256"),           // Palette: "ansi16", "ansi256", "jetbrains32", or path
+    img2ansi.WithPalette("ansi256"),           // Palette: "ansi16", "ansi16bbs", "ansi256", "jetbrains32", or path
     img2ansi.WithColorMethod(img2ansi.LABMethod{}),  // LABMethod{}, RedmeanMethod{}, RGBMethod{}
     img2ansi.WithKdSearch(50),                 // KD-tree search depth (0 = use precomputed tables)
     img2ansi.WithCacheThreshold(40.0),         // Error threshold for cache hits
+)
+```
+
+For BBS output (CP437 encoding, legacy escape codes), restrict the block
+set and pick the palette that matches the viewer's capabilities:
+
+```go
+// Without iCE colors: 8 background colors, bright via bold foregrounds
+r := img2ansi.NewRenderer(
+    img2ansi.WithBBSMode(),
+    img2ansi.WithPalette("ansi16bbs"),
+)
+
+// With iCE colors: 16 background colors via the blink attribute
+r := img2ansi.NewRenderer(
+    img2ansi.WithBBSMode(),
+    img2ansi.WithICEColors(),
+    img2ansi.WithPalette("ansi16"),
 )
 ```
 
@@ -168,6 +186,11 @@ r.BrownDitherForBlocks(resize(img, 80, 40), edges3)   // More hits
 func (r *Renderer) BrownDitherForBlocks(img *imageutil.RGBAImage, edges *imageutil.GrayImage) [][]BlockRune
 func (r *Renderer) RenderToAnsi(blocks [][]BlockRune) string
 func (r *Renderer) CompressANSI(ansi string) string
+func (r *Renderer) CompressBBS(blocks [][]BlockRune) []byte  // BBS-compatible CP437 output
+
+// High-level rendering
+func (r *Renderer) ImageToANSI(imagePath string) (string, error)
+func (r *Renderer) ImageToBBS(imagePath string) ([]byte, error) // BBS-compatible output
 
 // Statistics
 func (r *Renderer) CacheStats() (hits, misses int, hitRate float64)

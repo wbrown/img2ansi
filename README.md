@@ -67,10 +67,10 @@ go build github.com/wbrown/ansi2img/cmd/ansify
 ```
 
 ## Usage
-`./img2ansi -input <input> [-output <output>] [-width <width>]
-[-scale <scale>] [-quantization <quantization>] [-maxchars <maxchars>]
-[-color_method <color_method>] [-palette <palette>] [-kdsearch <kdsearch>]
-[-cache_threshold <cache_threshold>]`
+`./ansify -input <input> [-output <output>] [-width <width>]
+[-scale <scale>] [-maxchars <maxchars>]
+[-colormethod <colormethod>] [-palette <palette>] [-kdsearch <kdsearch>]
+[-cache_threshold <cache_threshold>] [-bbs] [-ice]`
 
 **Performance**
 
@@ -124,23 +124,44 @@ this is the primary factor in determining the output ANSI dimensions. The
 default `-scale` is `2`, which approximately halves the height of the output,
 to compensate for the fact that characters are taller than they are wide.
 
+**BBS Output**
+
+The `-bbs` flag produces BBS-compatible `.ANS` files with CP437 encoding, legacy
+ANSI escape codes (`ESC[1;3xm` for bright foreground, `ESC[5;4xm` for bright
+background), and CR+LF line endings. Only the 6 block characters available in
+CP437 are used (space, `▀`, `▄`, `▌`, `▐`, `█`).
+
+Without iCE colors a BBS can only display 8 background colors, so plain `-bbs`
+uses the `ansi16bbs` palette (16 foreground / 8 background colors). Bright
+areas are still reachable: the encoder expresses them as bold foregrounds on
+full and half blocks.
+
+The `-ice` flag enables iCE colors, which repurposes the blink attribute to
+allow 16 background colors instead of 8, and switches to the full `ansi16`
+palette. The viewer must support iCE colors (e.g. SyncTERM, PabloDraw) or
+bright backgrounds will blink instead.
+
 ```
+  -bbs
+    	Output BBS-compatible .ANS files (CP437 encoding, legacy escape codes, CR+LF)
   -cache_threshold float
-    	Threshold for block cache (default 40)
+    	Max error for approximate cache matches (higher=faster, lower=better quality) (default 200)
   -colormethod string
     	Color distance method: RGB, LAB, or Redmean (default "RGB")
+  -ice
+    	Enable iCE colors for BBS mode: 16 background colors instead of 8.
+    	Requires -bbs. Viewers must support iCE (SyncTERM, PabloDraw)
+    	or bright backgrounds will blink instead
   -input string
     	Path to the input image file (required)
   -kdsearch int
-    	Number of nearest neighbors to search in KD-tree, 0 to disable (default 50)
+    	KD-tree search depth (0=use fast precomputed tables, >0=runtime search)
   -maxchars int
     	Maximum number of characters in the output (default 1048576)
   -output string
     	Path to save the output (if not specified, prints to stdout)
   -palette string
-    	Path to the palette file (Embedded: ansi16, ansi256, jetbrains32) (default "ansi16")
-  -quantization int
-    	Quantization factor (default 256)
+    	Path to the palette file (Embedded: ansi16, ansi16bbs, ansi256, jetbrains32) (default "ansi16")
   -scale float
     	Scale factor for the output image (default 2)
   -width int
