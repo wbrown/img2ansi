@@ -494,6 +494,20 @@ func nearestFg(r *Renderer, c RGB) RGB {
 	return nearest
 }
 
+// noDiffusionQuadrant is the diffusion-ablated control arm: the same
+// per-block search as the quadrant dither with no error diffusion.
+// Against the glyph matcher (also undiffused) it isolates the
+// REPRESENTATION variable — 2x2 quadrants vs 8x8 glyphs — and against
+// the full dither it isolates diffusion. Without it, dither-vs-matcher
+// comparisons conflate the two.
+type noDiffusionQuadrant struct{ r *Renderer }
+
+func (n noDiffusionQuadrant) SourcePixelsPerCell() int { return 2 }
+
+func (n noDiffusionQuadrant) Convert(img *imageutil.RGBAImage, edges *imageutil.GrayImage) [][]BlockRune {
+	return ditherNoDiffusion(n.r, img, edges)
+}
+
 // meanColorConverter is the floor any 8x8 glyph matcher must beat: each
 // cell becomes a full block in the palette color nearest the cell mean.
 type meanColorConverter struct{ r *Renderer }
@@ -553,6 +567,13 @@ func TestConverterArms(t *testing.T) {
 			r := NewRenderer(WithPalette(pal))
 			arms := []converterArm{
 				quadrantArm("quadrant-dither", r),
+				{
+					name: "quadrant-no-diff",
+					conv: noDiffusionQuadrant{r},
+					render: func(blocks [][]BlockRune) *imageutil.RGBAImage {
+						return renderBlocksToImageScaled(blocks, scorePxPerCell)
+					},
+				},
 				fontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
 				fontArm("mean-color-block", meanColorConverter{r}, font),
 			}

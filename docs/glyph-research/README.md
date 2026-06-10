@@ -219,65 +219,69 @@ the original research validated); `TestGlyphMatcherExactGlyph` pins the
 promise the old scorer never kept: a cell that IS a glyph matches that
 glyph.
 
-Current standings (blurred ΔE, σ = 1 cell, ansi16, `TestConverterArms`,
-measured with the corrected nearest-color tables):
+A dither-vs-matcher comparison conflates two variables: the cell
+REPRESENTATION (2×2 quadrants vs 8×8 glyphs) and ERROR DIFFUSION (the
+dither has it, the matcher does not yet). The harness therefore carries
+a diffusion-ablated control arm (`quadrant-no-diff`: the same per-block
+search as the dither, diffusion off), so the two factors can be read
+separately. Standings (blurred ΔE, σ = 1 cell, `TestConverterArms`,
+corrected nearest-color tables):
 
-| image | quadrant dither (2×2) | glyph matcher (8×8) | mean-color blocks (8×8) |
-|---|---|---|---|
-| gray-gradient | 2.52 | 6.58 | 6.58 |
-| fleshtone | 13.40 | 29.34 | 29.18 |
-| color-ramp | 9.65 | 23.69 | 23.61 |
-| fox | 7.69 | 17.08 | 17.63 |
-| mandrill | 11.56 | 15.84 | 17.22 |
-| wheel | 9.29 | 24.49 | 24.38 |
+ansi16:
 
-This sharpens the original lab's headline finding: at 16 colors the 2×2
-quadrant dither wins everywhere by roughly 2×, and exhaustive glyph
-matching beats the flat mean-color block only modestly on photos
-(mandrill −8%, fox −3%) while tying it on smooth ramps — one (fg, bg)
-pair per 8×8 cell cannot follow a gradient no matter which glyph is
-chosen. The medium, not the matching, is the constraint. (An earlier
-draft of this table showed the matcher far ahead of the baseline; that
-gap was an artifact of the baseline reading the then-broken
-nearest-color tables.)
+| image | 2×2 dither | 2×2 no-diffusion | 8×8 matcher | 8×8 flat blocks |
+|---|---|---|---|---|
+| gray-gradient | 2.52 | 6.58 | 6.58 | 6.58 |
+| fleshtone | 13.40 | 29.31 | 29.34 | 29.18 |
+| color-ramp | 9.65 | 23.69 | 23.69 | 23.61 |
+| fox | 7.69 | 15.32 | 17.08 | 17.63 |
+| mandrill | 11.56 | 14.92 | 15.82 | 17.22 |
+| wheel | 9.29 | 23.41 | 24.49 | 24.38 |
 
-And at 256 colors (`TestConverterArms/ansi256`):
+ansi256:
 
-| image | quadrant dither (2×2) | glyph matcher (8×8) | mean-color blocks (8×8) |
-|---|---|---|---|
-| gray-gradient | 0.29 | 0.36 | 0.38 |
-| fleshtone | 3.97 | 10.82 | 11.06 |
-| color-ramp | 2.70 | 7.77 | 8.09 |
-| fox | 3.81 | 9.18 | 9.77 |
-| mandrill | 3.52 | 5.57 | 7.17 |
-| wheel | 2.40 | 11.39 | 11.47 |
+| image | 2×2 dither | 2×2 no-diffusion | 8×8 matcher | 8×8 flat blocks |
+|---|---|---|---|---|
+| gray-gradient | 0.29 | 0.36 | 0.36 | 0.38 |
+| fleshtone | 3.97 | 11.00 | 10.82 | 11.06 |
+| color-ramp | 2.70 | 7.81 | 7.77 | 8.09 |
+| fox | 3.81 | 7.93 | 9.18 | 9.77 |
+| mandrill | 3.52 | 5.64 | 5.57 | 7.17 |
+| wheel | 2.40 | 10.54 | 11.39 | 11.47 |
 
-This **refines** the original lab's "256 colors largely close the gap"
-finding rather than confirming it. Under the blurred-ΔE referee,
-256 colors improve everything 3–4×, and the matcher's advantage over
-flat blocks grows where there is texture (mandrill −22% vs −8% at 16
-colors) — but the quadrant dither improves even faster, so the
-*relative* gap to 2×2 widens (mandrill ratio 1.37→1.58, fox
-2.22→2.41). Error diffusion exploits a finer palette better than
-per-cell color pairs can. The old conclusion was a visual judgment
-made without a quantitative referee: both arms improving 3× reads as
-"the gap closed" to the eye. Two caveats keep the door open for
-glyphs: the matcher has no error diffusion of its own, and a
-tone-oriented metric structurally favors diffusion — a
-structure-sensitive metric, or the hybrid below, may read differently.
+Reading the two factors apart:
+
+- **Representation (2×2 no-diffusion vs 8×8 matcher, apples to
+  apples):** near parity. At 16 colors they tie on every synthetic ramp
+  and 2×2 leads by 5–11% on photos. At 256 colors the matcher *ties or
+  wins* on four of six images (mandrill 5.57 vs 5.64, fleshtone 10.82
+  vs 11.00) and trails moderately on fox and the wheel. This is
+  consistent with the original lab's conclusion that 256 colors close
+  the representation gap — an earlier draft of this section claimed the
+  opposite by comparing the diffused dither against the undiffused
+  matcher and attributing the whole gap to representation.
+- **Diffusion:** the dominant factor, worth 2–4× on this metric
+  (mandrill-256: 5.64 → 3.52 from diffusion alone), and it grows with
+  palette size because diffusion exploits finer palettes. The full
+  dither's practical lead over the matcher is essentially this term.
+
+Which makes the highest-leverage next step obvious: give the matcher
+error diffusion. The representation is already competitive; the missing
+2–4× is a mechanism, not a limitation of glyphs.
 
 ## Where the matching should go next
 
-1. **Hybrid cells.** Glyph matching where structure is high and color
+1. **Error diffusion for the matcher.** The control arm shows diffusion
+   is worth 2–4× on the blurred-ΔE metric and is essentially the entire
+   practical lead of the 2×2 dither — while the representations are at
+   parity at 256 colors. Diffusing each cell's residual (against its
+   rendered glyph) into neighboring cells gives the matcher the same
+   lever; the quantified ceiling makes this the highest-leverage
+   experiment in the lab.
+2. **Hybrid cells.** Glyph matching where structure is high and color
    variance low (line art, edges); 2×2 quadrant dithering elsewhere.
    The `edges` argument of `Convert` is currently unused — it is the
-   natural input for the mode decision. The 256-color standings make
-   this the live question: the matcher's wins are localized to
-   texture/structure, exactly where a hybrid would deploy it.
-2. **Error diffusion for the matcher.** The dither's widening lead at
-   256 colors is diffusion exploiting the finer palette. Diffusing each
-   cell's residual (against its rendered glyph) into neighboring cells
-   would give the matcher the same lever.
+   natural input for the mode decision.
 3. **A structure-sensitive referee.** Blurred ΔE measures tone; glyph
    matching's pitch is structure. An SSIM-like arm in the harness would
    test whether the matcher preserves edges better than the numbers
