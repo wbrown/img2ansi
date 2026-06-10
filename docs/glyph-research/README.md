@@ -178,6 +178,40 @@ the `font-analysis` lab:
 - Removing space/full-block from the glyph set forces pattern usage and
   improves perceived structure.
 
+## The cross-converter harness
+
+The framework for running matcher experiments is in place. A converter
+is anything implementing `BlockConverter` (`converter.go`):
+
+```go
+type BlockConverter interface {
+    Convert(img *imageutil.RGBAImage, edges *imageutil.GrayImage) [][]BlockRune
+    SourcePixelsPerCell() int // 2 for the quadrant dither, 8 for glyph matchers
+}
+```
+
+`measureConverterArms` (`diffusion_quality_test.go`) runs any set of
+converters over the same cell grid: each arm's input is prepared at its
+native source resolution, its output rendered back to pixels at a
+common 8 px/cell (quadrant geometry or font glyphs), and every arm is
+scored against the same reference with blur sigma expressed in *cell
+widths*, so numbers are comparable across source resolutions. The
+`Renderer` itself is the reference converter; `TestConverterArms` pins
+the floor with an 8×8 mean-color full-block baseline (blurred ΔE,
+σ = 1 cell, ansi16):
+
+| image | quadrant dither (2×2) | mean-color blocks (8×8) |
+|---|---|---|
+| gray-gradient | 2.52 | 10.54 |
+| fleshtone | 13.40 | 29.18 |
+| color-ramp | 9.65 | 26.43 |
+| mandrill | 11.56 | 19.64 |
+
+A glyph matcher enters the tournament by implementing `BlockConverter`
+and being added as a `fontArm` — nothing else. To justify itself it has
+to beat the mean-color floor decisively and approach (or beat, in its
+target regimes) the quadrant dither.
+
 ## Where the matching should go next
 
 1. **Replace similarity scoring with the ideal-mask formulation.** For a
@@ -187,15 +221,12 @@ the `font-analysis` lab:
    closest to it under |δ|-weighted Hamming distance. `GlyphBitmap` is
    already a `uint64`: XOR + popcount makes true exhaustive matching
    real-time instead of 5 minutes, and deletes the heuristic zoo. 'O'
-   matches circles because nothing approximates anymore.
-2. **Reuse the diffusion quality harness as referee.** The blurred-LAB
-   metric in `diffusion_quality_test.go` scores glyph renders exactly
-   the way it scores block dithering (render via
-   `FontBitmaps.RenderBlocks`).
-3. **Hybrid cells.** Glyph matching where structure is high and color
+   matches circles because nothing approximates anymore. Wrap it in a
+   `BlockConverter` and the harness above scores it immediately.
+2. **Hybrid cells.** Glyph matching where structure is high and color
    variance low (line art, edges); 2×2 quadrant dithering elsewhere.
    This was the most promising direction in the old lab notes and is
    now measurable.
-4. **More fonts via ROM dumps.** `LoadROMFont` accepts the classic
+3. **More fonts via ROM dumps.** `LoadROMFont` accepts the classic
    2048-byte CP437 format directly — bit-perfect, no rasterization, and
    covers the PETSCII/ATASCII/DOS font family this research targets.

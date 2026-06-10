@@ -388,6 +388,11 @@ blocks) now lives on `main`:
   CP437 derivation). Alphabet derivation uses `GenuineGlyph`, never
   `GetGlyph` — synthesized glyphs render previews, they do not expand a
   target's alphabet.
+- `converter.go`: `BlockConverter` — the slot a glyph matcher implements
+  (`Convert` + `SourcePixelsPerCell`). The `Renderer` is the reference
+  implementation; the harness scores any set of converters on a common
+  cell grid against the same reference (see Measuring Diffusion
+  Quality), with an 8×8 mean-color baseline as the floor to beat.
 - `cmd/compute_glyphs/`: Glyph extraction tool with self-calibrating
   TTF rasterization (keeps the freetype dependency out of the library).
 
@@ -515,6 +520,14 @@ output back to pixels and scores it against the pre-dither reference:
 - Arms: `no-diffusion` (per-block quantization) vs `diffusion`.
 - `TestDiffusionQualityPhotos` runs against any PNGs in `images/`
   (not committed); set `DIFFUSION_PNGS=<dir>` to dump comparison renders.
+
+The cross-converter harness (`measureConverterArms`,
+`TestConverterArms`) generalizes this to any `BlockConverter`: each
+arm's input is prepared at its native source resolution for the same
+cell grid, outputs are rendered at a common 8 px/cell (quadrant
+geometry or font glyphs), and blur sigma is expressed in cell widths so
+scores are comparable across converters. This is how glyph matchers get
+scored against the quadrant dither.
 
 ### Terminal Color Palette Variations
 
