@@ -78,11 +78,19 @@ type FontGlyphData struct {
 }
 
 // Embedded font glyph data.
+//
+//   - pxplus_ibm_bios: CC BY-SA 4.0 TTF recreation of the IBM PC BIOS
+//     font (CP437 coverage; quadrant blocks synthesized).
+//   - font8x8: public domain (dhepper/font8x8); complete block element
+//     and box drawing coverage, all 16 quadrants genuine.
+//
 // To add more fonts:
 //  1. Run: ./cmd/compute_glyphs/compute_glyphs -font yourfont.ttf -output fontdata/yourfont.glyphs
+//     (or -rom for ROM dumps, -font8x8 for font8x8-style C headers)
 //  2. Add: //go:embed fontdata/yourfont.glyphs
 //
 //go:embed fontdata/pxplus_ibm_bios.glyphs
+//go:embed fontdata/font8x8.glyphs
 var fontFS embed.FS
 
 // LoadEmbeddedFont loads pre-computed glyph data compiled into the binary,

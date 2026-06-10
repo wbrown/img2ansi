@@ -23,7 +23,11 @@ import (
 	"math"
 	"math/bits"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/golang/freetype"
 	"github.com/golang/freetype/truetype"
@@ -267,6 +271,58 @@ func computeFromTTF(fontPath string) (*img2ansi.FontGlyphData, error) {
 	return data, nil
 }
 
+// font8x8LineRe matches one glyph row in a dhepper/font8x8 C header,
+// e.g.: { 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F},   // U+258C (left half)
+var font8x8LineRe = regexp.MustCompile(
+	`\{\s*((?:0x[0-9A-Fa-f]{2}\s*,\s*){7}0x[0-9A-Fa-f]{2})\s*,?\s*\}\s*,?\s*//\s*U\+([0-9A-Fa-f]{4})`)
+
+// computeFromFont8x8 parses dhepper/font8x8-style C headers (public
+// domain 8x8 bitmap fonts): one byte per row, LSB = leftmost pixel —
+// the same layout as GlyphBitmap, so each row loads with a shift. The
+// codepoint comes from the per-line U+XXXX comment, so array order and
+// file ranges never need to be assumed.
+func computeFromFont8x8(dir string) (*img2ansi.FontGlyphData, error) {
+	headers, err := filepath.Glob(filepath.Join(dir, "*.h"))
+	if err != nil || len(headers) == 0 {
+		return nil, fmt.Errorf("no .h files found in %s", dir)
+	}
+
+	data := &img2ansi.FontGlyphData{
+		FontName: dir,
+		Glyphs:   make(map[rune]img2ansi.GlyphBitmap),
+	}
+	for _, path := range headers {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read %s: %w", path, err)
+		}
+		matches := font8x8LineRe.FindAllStringSubmatch(string(raw), -1)
+		log.Printf("  %s: %d glyphs", filepath.Base(path), len(matches))
+		for _, m := range matches {
+			cp, err := strconv.ParseUint(m[2], 16, 32)
+			if err != nil {
+				continue
+			}
+			var g img2ansi.GlyphBitmap
+			for y, hexByte := range strings.Split(m[1], ",") {
+				b, err := strconv.ParseUint(strings.TrimSpace(hexByte), 0, 8)
+				if err != nil {
+					return nil, fmt.Errorf("%s: bad byte %q for U+%s", path, hexByte, m[2])
+				}
+				g |= img2ansi.GlyphBitmap(b) << (y * img2ansi.GlyphWidth)
+			}
+			// Duplicate labels indicate a mislabeled glyph (it shadows one
+			// codepoint and leaves another missing); the vendored box
+			// header had exactly this bug upstream at U+2547/U+2548/U+254B.
+			if _, dup := data.Glyphs[rune(cp)]; dup {
+				log.Printf("WARNING: %s: duplicate glyph label U+%s", path, m[2])
+			}
+			data.Glyphs[rune(cp)] = g
+		}
+	}
+	return data, nil
+}
+
 // computeFromROM converts a 2048-byte CP437 ROM font dump.
 func computeFromROM(romPath string) (*img2ansi.FontGlyphData, error) {
 	raw, err := os.ReadFile(romPath)
@@ -363,23 +419,34 @@ func dumpGlyphs(data *img2ansi.FontGlyphData, chars string, oldPath string) {
 func main() {
 	inputFont := flag.String("font", "", "Path to a TrueType font file")
 	inputROM := flag.String("rom", "", "Path to a 2048-byte CP437 ROM font dump")
+	inputF8x8 := flag.String("font8x8", "", "Directory of dhepper/font8x8 C headers")
 	outputFile := flag.String("output", "", "Path to save the .glyphs output")
 	comparePath := flag.String("compare", "", "Existing .glyphs file to diff against")
 	dump := flag.String("dump", "", "Characters to print as bitmaps for inspection")
 	flag.Parse()
 
-	if (*inputFont == "") == (*inputROM == "") {
-		fmt.Println("Exactly one of -font or -rom is required")
+	sources := 0
+	for _, s := range []string{*inputFont, *inputROM, *inputF8x8} {
+		if s != "" {
+			sources++
+		}
+	}
+	if sources != 1 {
+		fmt.Println("Exactly one of -font, -rom, or -font8x8 is required")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
 	var data *img2ansi.FontGlyphData
 	var err error
-	if *inputROM != "" {
+	switch {
+	case *inputROM != "":
 		log.Printf("Converting ROM font: %s", *inputROM)
 		data, err = computeFromROM(*inputROM)
-	} else {
+	case *inputF8x8 != "":
+		log.Printf("Parsing font8x8 headers in: %s", *inputF8x8)
+		data, err = computeFromFont8x8(*inputF8x8)
+	default:
 		log.Printf("Computing glyphs for font: %s", *inputFont)
 		data, err = computeFromTTF(*inputFont)
 	}

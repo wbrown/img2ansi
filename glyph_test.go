@@ -190,27 +190,66 @@ func TestLoadEmbeddedFont(t *testing.T) {
 
 // TestBlockGlyphsCoverDitherOutput verifies every rune the dither
 // pipeline can emit resolves to a bitmap matching its exact quadrant
-// geometry. This is the regression test for the .notdef poisoning bug:
-// PxPlus IBM BIOS has no glyphs for the 10 quadrant-only runes, and the
-// generator used to embed the font's missing-glyph box (an inverse '?')
-// for them, which RenderBlocks then drew all over dithered output.
+// geometry, in every embedded font. This is the regression test for the
+// .notdef poisoning bug: PxPlus IBM BIOS has no glyphs for the 10
+// quadrant-only runes, and the generator used to embed the font's
+// missing-glyph box (an inverse '?') for them, which RenderBlocks then
+// drew all over dithered output.
 func TestBlockGlyphsCoverDitherOutput(t *testing.T) {
-	fb, err := LoadEmbeddedFont("pxplus_ibm_bios")
+	for _, name := range []string{"pxplus_ibm_bios", "font8x8"} {
+		fb, err := LoadEmbeddedFont(name)
+		if err != nil {
+			t.Fatalf("LoadEmbeddedFont(%q) failed: %v", name, err)
+		}
+
+		for _, b := range Blocks {
+			g, ok := fb.GetGlyph(b.Rune)
+			if !ok {
+				t.Errorf("%s: no glyph for dither rune %q", name, b.Rune)
+				continue
+			}
+			want := glyphFromQuadrants(b.Quad)
+			if g != want {
+				t.Errorf("%s: glyph %q does not match its quadrant geometry:\ngot:\n%vwant:\n%v",
+					name, b.Rune, g, want)
+			}
+		}
+	}
+}
+
+// TestFont8x8Coverage verifies the public domain font8x8 set: complete
+// box drawing (including the heavy/dashed variants CP437 fonts lack)
+// and the upstream label fix at U+2547/U+2548 (the vendored header had
+// these two swapped/duplicated; they are distinguished by bottom stem
+// weight: ╇ has a light 1px stem below the bar, ╈ a heavy 2px one).
+func TestFont8x8Coverage(t *testing.T) {
+	fb, err := LoadEmbeddedFont("font8x8")
 	if err != nil {
 		t.Fatalf("LoadEmbeddedFont failed: %v", err)
 	}
 
-	for _, b := range Blocks {
-		g, ok := fb.GetGlyph(b.Rune)
+	for _, r := range []rune{'A', '█', '▘', '▚', '░', '─', '│', '━', '┅', '╋', '╪'} {
+		if _, ok := fb.GetGlyph(r); !ok {
+			t.Errorf("font8x8 missing glyph %q", r)
+		}
+	}
+
+	bottomWidth := func(r rune) int {
+		g, ok := fb.GetGlyph(r)
 		if !ok {
-			t.Errorf("no glyph for dither rune %q", b.Rune)
-			continue
+			t.Fatalf("font8x8 missing glyph %q", r)
 		}
-		want := glyphFromQuadrants(b.Quad)
-		if g != want {
-			t.Errorf("glyph %q does not match its quadrant geometry:\ngot:\n%vwant:\n%v",
-				b.Rune, g, want)
+		n := 0
+		for x := 0; x < GlyphWidth; x++ {
+			if g.Bit(x, GlyphHeight-1) {
+				n++
+			}
 		}
+		return n
+	}
+	if up, down := bottomWidth('╇'), bottomWidth('╈'); up != 1 || down != 2 {
+		t.Errorf("U+2547/U+2548 label fix regressed: ╇ bottom stem %dpx (want 1), ╈ %dpx (want 2)",
+			up, down)
 	}
 }
 

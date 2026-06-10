@@ -107,6 +107,22 @@ Fixes, in both directions:
 - `TestBlockGlyphsCoverDitherOutput` pins every rune the dither can emit
   to its exact quadrant geometry.
 
+## Fonts
+
+Two glyph sets are embedded:
+
+| font | license | coverage |
+|---|---|---|
+| `pxplus_ibm_bios` | CC BY-SA 4.0 (TTF recreation) | CP437: ASCII, 6 of 16 blocks (rest synthesized), single/double box drawing |
+| `font8x8` | **Public domain** (dhepper/font8x8) | ASCII, complete U+2580–259F (all 16 quadrants genuine), complete U+2500–257F box drawing |
+
+For permissively-licensed work and for matcher experiments wanting full
+genuine block/box coverage, `font8x8` is the recommended default — it
+loads from raw byte data (`fonts/font8x8/`, no rasterization at all)
+and its row format is bit-compatible with `GlyphBitmap`. The IBM BIOS
+font remains the authentic-CP437-aesthetic option. ROM dumps of other
+8x8 fonts load directly via `LoadROMFont`.
+
 ## Findings carried over from the experiment log
 
 From [GLYPH_MATCHING_EXPERIMENTS.md](GLYPH_MATCHING_EXPERIMENTS.md) and
