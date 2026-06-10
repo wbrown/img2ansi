@@ -832,6 +832,18 @@ geometry or font glyphs), and blur sigma is expressed in cell widths so
 scores are comparable across converters. This is how glyph matchers get
 scored against the quadrant dither.
 
+**Two color metrics are in play and they are not the same.** Every
+harness renderer is built without `WithColorMethod`, so all MATCHING
+and search distances use the `Renderer` default, **Redmean** — every
+standings number in the research docs was matched with Redmean unless
+explicitly labeled. The SCORING referee (`blurredLabError`) judges in
+**LAB ΔE**. Matching in LAB to align objective with referee is worth a
+further ~20% on the matcher (see the color-metric table in
+`docs/glyph-research/README.md`); the trade-off is that LAB's
+`Distance` converts both colors per call, making LAB matching at 256
+colors roughly an order of magnitude slower than Redmean (a
+`toLab`-memoization perf item, not a design limit).
+
 ### Terminal Color Palette Variations
 
 **Important**: The ANSI color codes (30-37, 90-97, etc.) are interpreted differently by different terminals. The algorithm outputs standard ANSI codes, but the actual RGB values displayed depend on the terminal's color scheme. This can lead to significantly different visual results between terminals.
