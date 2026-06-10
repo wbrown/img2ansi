@@ -74,6 +74,7 @@ r := img2ansi.NewRenderer(
     img2ansi.WithColorMethod(img2ansi.LABMethod{}),  // LABMethod{}, RedmeanMethod{}, RGBMethod{}
     img2ansi.WithKdSearch(50),                 // KD-tree search depth (0 = use precomputed tables)
     img2ansi.WithCacheThreshold(40.0),         // Error threshold for cache hits
+    img2ansi.WithBBSMode(false),               // BBS output: CP437 encoding, legacy codes (ice=true for 16 BG colors)
 )
 ```
 
@@ -168,6 +169,11 @@ r.BrownDitherForBlocks(resize(img, 80, 40), edges3)   // More hits
 func (r *Renderer) BrownDitherForBlocks(img *imageutil.RGBAImage, edges *imageutil.GrayImage) [][]BlockRune
 func (r *Renderer) RenderToAnsi(blocks [][]BlockRune) string
 func (r *Renderer) CompressANSI(ansi string) string
+func (r *Renderer) CompressBBS(blocks [][]BlockRune) []byte  // BBS-compatible CP437 output
+
+// High-level rendering
+func (r *Renderer) ImageToANSI(imagePath string) (string, error)
+func (r *Renderer) ImageToBBS(imagePath string) ([]byte, error) // BBS-compatible output
 
 // Statistics
 func (r *Renderer) CacheStats() (hits, misses int, hitRate float64)

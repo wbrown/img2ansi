@@ -40,6 +40,17 @@ type blockDef struct {
 	Quad Quadrants
 }
 
+// BBSBlocks defines the 6 block characters available in CP437 encoding.
+// These are the only Unicode block characters that have CP437 equivalents.
+var BBSBlocks = []blockDef{
+	{' ', Quadrants{false, false, false, false}}, // Space (0x20)
+	{'▀', Quadrants{true, true, false, false}},   // Upper half block (0xDF)
+	{'▄', Quadrants{false, false, true, true}},   // Lower half block (0xDC)
+	{'▌', Quadrants{true, false, true, false}},   // Left half block (0xDD)
+	{'▐', Quadrants{false, true, false, true}},   // Right half block (0xDE)
+	{'█', Quadrants{true, true, true, true}},     // Full block (0xDB)
+}
+
 // BlockRune represents a 2x2 block of runes with foreground and
 // background colors mapped in the ANSI color space. The struct contains
 // a rune representing the block character, and two RGB colors representing
@@ -184,7 +195,7 @@ func (r *Renderer) FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune,
 		var bestFG, bestBG RGB
 		minError := math.MaxFloat64
 
-		for _, b := range Blocks {
+		for _, b := range r.getBlocks() {
 			r.fgAnsi.Iterate(func(fg, _ interface{}) {
 				fgRgb := rgbFromUint32(fg.(uint32))
 				r.bgAnsi.Iterate(func(bg, _ interface{}) {
@@ -223,7 +234,7 @@ func (r *Renderer) FindBestBlockRepresentation(block [4]RGB, isEdge bool) (rune,
 	var bestFG, bestBG RGB
 	minError := math.MaxFloat64
 
-	for _, b := range Blocks {
+	for _, b := range r.getBlocks() {
 		for _, fgWithDist := range foregroundColors {
 			for _, bgWithDist := range backgroundColors {
 				fg, bg := fgWithDist.color, bgWithDist.color
@@ -376,6 +387,51 @@ func (r *Renderer) ImageToANSI(imagePath string) (string, error) {
 		height = int(float64(width) / aspectRatio / 2)
 		if width < 10 {
 			return "", fmt.Errorf("image too large to fit within character limit")
+		}
+	}
+}
+
+// ImageToBBS converts an image to BBS-compatible ANSI art with CP437 encoding.
+// Returns raw bytes (not a string) since CP437 is not valid UTF-8.
+func (r *Renderer) ImageToBBS(imagePath string) ([]byte, error) {
+	img, err := imageutil.LoadImage(imagePath)
+	if err != nil {
+		return nil, fmt.Errorf("could not read image from %s: %v", imagePath, err)
+	}
+
+	aspectRatio := float64(img.Width()) / float64(img.Height())
+	width := r.TargetWidth
+	height := int(float64(width) / aspectRatio / r.ScaleFactor)
+
+	for {
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		ditheredImg := r.BrownDitherForBlocks(resized, edges)
+
+		// Write debug files
+		if err := imageutil.SavePNG(resized.RGBA, "resized.png"); err != nil {
+			fmt.Println(err)
+		}
+		if err := saveBlocksToPNG(ditheredImg,
+			"dithered.png",
+			len(ditheredImg[0])*8,
+			int(float64(len(ditheredImg)*8)*r.ScaleFactor),
+			r.ScaleFactor,
+		); err != nil {
+			fmt.Println(err)
+		}
+		if err := imageutil.SaveGrayImage(edges, "edges.png"); err != nil {
+			fmt.Println(err)
+		}
+
+		bbsOutput := r.CompressBBS(ditheredImg)
+		if len(bbsOutput) <= r.MaxChars {
+			return bbsOutput, nil
+		}
+
+		width -= 2
+		height = int(float64(width) / aspectRatio / 2)
+		if width < 10 {
+			return nil, fmt.Errorf("image too large to fit within character limit")
 		}
 	}
 }

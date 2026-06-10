@@ -25,6 +25,10 @@ type Renderer struct {
 	CacheThreshold float64
 	ColorMethod    ColorDistanceMethod
 
+	// Block set override (nil = use default Blocks)
+	blocks    []blockDef
+	ICEColors bool
+
 	// Palette state (private)
 	palettePath   string
 	paletteLoaded bool
@@ -136,6 +140,25 @@ func WithTargetWidth(width int) RendererOption {
 	return func(r *Renderer) {
 		r.TargetWidth = width
 	}
+}
+
+// WithBBSMode configures the renderer for BBS-compatible output.
+// It restricts the block set to 6 CP437-compatible characters and
+// sets ICE colors mode (16 background colors via blink attribute).
+func WithBBSMode(iceColors bool) RendererOption {
+	return func(r *Renderer) {
+		r.blocks = BBSBlocks
+		r.ICEColors = iceColors
+	}
+}
+
+// getBlocks returns the block set to use for rendering.
+// Returns the custom block set if configured, otherwise the default 16 Unicode blocks.
+func (r *Renderer) getBlocks() []blockDef {
+	if r.blocks != nil {
+		return r.blocks
+	}
+	return Blocks
 }
 
 // LoadPalette loads a color palette from the given path.

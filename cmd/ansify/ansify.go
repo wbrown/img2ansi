@@ -64,6 +64,12 @@ func main() {
 		"Max error for approximate cache matches (higher=faster, lower=better quality)")
 	colorMethod := flag.String("colormethod",
 		"RGB", "Color distance method: RGB, LAB, or Redmean")
+	bbsMode := flag.Bool("bbs", false,
+		"Output BBS-compatible .ANS files (CP437 encoding, legacy escape codes, CR+LF)")
+	iceColors := flag.Bool("ice", false,
+		"Enable iCE colors for BBS mode: 16 background colors instead of 8.\n"+
+			"    \tRequires -bbs. Viewers must support iCE (SyncTERM, PabloDraw)\n"+
+			"    \tor bright backgrounds will blink instead")
 	//printTable := flag.Bool("table", false,
 	//	"Print ANSI color table")
 	// Parse flags
@@ -96,17 +102,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create Renderer
-	startInit := time.Now()
-	r := img2ansi.NewRenderer(
+	// Force ansi16 palette in BBS mode
+	if *bbsMode {
+		*paletteFile = "ansi16"
+	}
+
+	// Build renderer options
+	opts := []img2ansi.RendererOption{
 		img2ansi.WithTargetWidth(*targetWidth),
 		img2ansi.WithScaleFactor(*scaleFactor),
 		img2ansi.WithMaxChars(*maxChars),
 		img2ansi.WithKdSearch(*kdSearchDepth),
 		img2ansi.WithCacheThreshold(*threshold),
 		img2ansi.WithColorMethod(method),
-		img2ansi.WithPalette(*paletteFile),
-	)
+	}
+	if *bbsMode {
+		opts = append(opts, img2ansi.WithBBSMode(*iceColors))
+	}
+	// Palette must be loaded last (after color method and BBS mode are set)
+	opts = append(opts, img2ansi.WithPalette(*paletteFile))
+
+	// Create Renderer
+	startInit := time.Now()
+	r := img2ansi.NewRenderer(opts...)
 	endInit := time.Now()
 
 	// Error out if precomputed tables aren't available (would be too slow)
@@ -126,35 +144,67 @@ func main() {
 		return
 	}
 
-	// Generate ANSI art
-	ansiArt, err := r.ImageToANSI(*inputFile)
-	if err != nil {
-		fmt.Printf("Error converting image: %v\n", err)
-		os.Exit(1)
-	}
-	compressedArt := r.CompressANSI(ansiArt)
-	endComputation := time.Now()
-
-	// Output result
-	if *outputFile != "" {
-		err := os.WriteFile(*outputFile, []byte(compressedArt), 0644)
+	if *bbsMode {
+		// Generate BBS ANSI art
+		bbsArt, err := r.ImageToBBS(*inputFile)
 		if err != nil {
-			fmt.Printf("Error writing to file: %v\n", err)
-			return
+			fmt.Printf("Error converting image: %v\n", err)
+			os.Exit(1)
 		}
-		fmt.Printf("Output written to %s\n", *outputFile)
-	} else {
-		fmt.Print(compressedArt)
-	}
+		endComputation := time.Now()
 
-	hits, misses, hitRate := r.CacheStats()
-	uniqueKeys, sharedKeys, totalBlocks, avgError := r.CacheKeyStats()
-	fmt.Printf("Computation time: %v\n", endComputation.Sub(endInit))
-	fmt.Printf("BestBlock calculation time: %v\n", r.GetBestBlockTime())
-	fmt.Printf("Total string length: %d\n", len(ansiArt))
-	fmt.Printf("Compressed string length: %d\n", len(compressedArt))
-	fmt.Printf("Block Cache: %d hits, %d misses (%.1f%% hit rate)\n",
-		hits, misses, hitRate*100)
-	fmt.Printf("Cache Keys: %d unique, %d shared (%d blocks, avg error %.1f)\n",
-		uniqueKeys, sharedKeys, totalBlocks, avgError)
+		// Output result
+		if *outputFile != "" {
+			err := os.WriteFile(*outputFile, bbsArt, 0644)
+			if err != nil {
+				fmt.Printf("Error writing to file: %v\n", err)
+				return
+			}
+			fmt.Printf("Output written to %s\n", *outputFile)
+		} else {
+			os.Stdout.Write(bbsArt)
+		}
+
+		hits, misses, hitRate := r.CacheStats()
+		uniqueKeys, sharedKeys, totalBlocks, avgError := r.CacheKeyStats()
+		fmt.Fprintf(os.Stderr, "Computation time: %v\n", endComputation.Sub(endInit))
+		fmt.Fprintf(os.Stderr, "BestBlock calculation time: %v\n", r.GetBestBlockTime())
+		fmt.Fprintf(os.Stderr, "BBS output size: %d bytes\n", len(bbsArt))
+		fmt.Fprintf(os.Stderr, "Block Cache: %d hits, %d misses (%.1f%% hit rate)\n",
+			hits, misses, hitRate*100)
+		fmt.Fprintf(os.Stderr, "Cache Keys: %d unique, %d shared (%d blocks, avg error %.1f)\n",
+			uniqueKeys, sharedKeys, totalBlocks, avgError)
+	} else {
+		// Generate ANSI art
+		ansiArt, err := r.ImageToANSI(*inputFile)
+		if err != nil {
+			fmt.Printf("Error converting image: %v\n", err)
+			os.Exit(1)
+		}
+		compressedArt := r.CompressANSI(ansiArt)
+		endComputation := time.Now()
+
+		// Output result
+		if *outputFile != "" {
+			err := os.WriteFile(*outputFile, []byte(compressedArt), 0644)
+			if err != nil {
+				fmt.Printf("Error writing to file: %v\n", err)
+				return
+			}
+			fmt.Printf("Output written to %s\n", *outputFile)
+		} else {
+			fmt.Print(compressedArt)
+		}
+
+		hits, misses, hitRate := r.CacheStats()
+		uniqueKeys, sharedKeys, totalBlocks, avgError := r.CacheKeyStats()
+		fmt.Printf("Computation time: %v\n", endComputation.Sub(endInit))
+		fmt.Printf("BestBlock calculation time: %v\n", r.GetBestBlockTime())
+		fmt.Printf("Total string length: %d\n", len(ansiArt))
+		fmt.Printf("Compressed string length: %d\n", len(compressedArt))
+		fmt.Printf("Block Cache: %d hits, %d misses (%.1f%% hit rate)\n",
+			hits, misses, hitRate*100)
+		fmt.Printf("Cache Keys: %d unique, %d shared (%d blocks, avg error %.1f)\n",
+			uniqueKeys, sharedKeys, totalBlocks, avgError)
+	}
 }
