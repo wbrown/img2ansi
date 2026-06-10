@@ -15,8 +15,8 @@ go build ./cmd/ansify
 # Build compute_tables utility (for precomputing color tables)
 go build ./cmd/compute_tables
 
-# Build compute_fonts utility (for font analysis)
-go build ./cmd/compute_fonts
+# Build compute_glyphs utility (font glyph extraction for research)
+cd cmd/compute_glyphs && go build .
 
 # Run all tests
 go test ./...
@@ -370,70 +370,63 @@ edges := imageutil.DetectEdges(resized)                  // Edge detection after
 
 ## Active Research: Font-Agnostic Rendering
 
-The `cmd/compute_fonts/` directory contains active research into font-agnostic image rendering. If you're working on or interested in this research, you should read:
+Glyph matching research (8x8 character cells instead of 2x2 quadrant
+blocks) now lives on `main`:
 
-- `cmd/compute_fonts/CLAUDE.md`: Overview of the research lab and latest findings
-- `cmd/compute_fonts/EXPERIMENT_GUIDE.md`: Guide to running experiments
-- `cmd/compute_fonts/GLYPH_MATCHING_EXPERIMENTS.md`: Detailed experimental results and analysis
+- `docs/glyph-research/README.md`: Lab overview — current status, the
+  rasterization-calibration story, and the roadmap. **Read this first.**
+- `docs/glyph-research/GLYPH_MATCHING_EXPERIMENTS.md`: The detailed
+  experiment log from the original `font-analysis` research branch.
+- `glyph.go` / `cp437.go`: `GlyphBitmap` infrastructure, `.glyphs` and
+  ROM font loading, font-based rendering of `BlockRune` output.
+- `cmd/compute_glyphs/`: Glyph extraction tool with self-calibrating
+  TTF rasterization (keeps the freetype dependency out of the library).
+
+The historical experiment code (the multi-factor similarity scorer,
+color selector experiments) remains on the `font-analysis` branch; the
+similarity scorer was deliberately not ported — see the lab README for
+the ideal-mask/popcount formulation that should replace it.
 
 Key findings so far:
-- 2×2 blocks still outperform 8×8 character matching
-- 256 colors dramatically improve quality over 16 colors
-- Simple heuristics (DominantColorSelector) are already near-optimal
-- The constraint is the medium (limited characters) not the algorithms
+- 2×2 blocks still outperform 8×8 character matching at 16 colors; both
+  spend one glyph + two colors per cell, but 8×8 must cover 16× more
+  source pixels with them. 256 colors largely close the gap.
+- Simple heuristics (DominantColorSelector) are near-optimal at 256
+  colors — validated by true exhaustive search. The constraint is the
+  medium, not the algorithms.
+- The most promising direction is hybrid cells: glyphs for high-detail
+  low-color regions, quadrant dithering elsewhere, refereed by the
+  blurred-LAB harness in `diffusion_quality_test.go`.
 
-## Glyph Matching Research Status
+### Glyph Bitmaps: Hard-Won Lessons
 
-The `cmd/compute_fonts/` directory contains ongoing research into glyph matching that could potentially upgrade from 2x2 blocks to 8x8 character matching. While initial results show 2x2 blocks still outperform 8x8, the research continues:
+1. **One canonical bit ordering.** Three incompatible orderings
+   coexisted in early implementations. The layout is row-major, LSB =
+   top-left (bit `y*8+x` = pixel `(x,y)`), implemented only in
+   `GlyphBitmap.Bit`/`SetBit` and locked by `TestGlyphBitmapOrdering`.
+   ROM dumps are MSB-left per row; only `LoadROMFont` does that swap.
 
-### How the Glyph System Works
+2. **Never trust font metrics at 8px — calibrate.** Rasterizing the TTF
+   recreation with metrics-derived baselines can pass blunt checks while
+   being wrong: a half-pixel baseline error still renders '█' and '▀'
+   perfectly (their edges sit on cell boundaries) yet smears every
+   single-pixel stroke across two rows. `compute_glyphs` searches
+   (ppem, baseline, x-offset) for zero coverage *ambiguity* — on the
+   design grid every cell is ~0% or ~100% inked. Its `-compare` flag
+   verifies regeneration is bit-identical to the embedded data.
 
-1. **Analyzes font glyphs** as 8x8 bitmaps (64-bit integers)
-2. **Extracts features** from each glyph:
-   - Pixel weight (filled pixel count)
-   - Zone weights (4x4 zones)
-   - Edge maps and diagonal line detection
-3. **Matches image blocks to characters** using:
-   - 70% shape similarity
-   - 20% pattern similarity
-   - 10% density similarity
-4. **Optimizations**:
-   - Pre-built lookup tables by zone weights
-   - Special handling for diagonal characters (/, \)
-   - Font safety checks (characters must exist in fallback font)
+3. **Font quirks are real, not bugs.** Two independent rasterization
+   approaches produce bit-identical glyphs, confirming: '|' genuinely
+   has a gap at row 3 (CP437 broken-bar tradition), '+' genuinely sits
+   left of center (column 7 is the spacing column). "Obvious" matches
+   may not work as expected — that is the font, not the loader.
 
-This will provide:
-- **4x higher resolution** (8x8 vs 2x2 pixels per character)
-- **Thousands of characters** instead of just 16 block elements
-- **Better visual quality** through intelligent character selection
-
-Example: Instead of using '▀' for a horizontal line, it could use '─' or '═' for cleaner appearance.
-
-### Critical Bug Fix (Fixed in commit after initial development)
-
-The glyph matching system had a **critical bit ordering bug** that made it non-functional:
-- `analyzeGlyph()` used reversed bit ordering: `(GlyphHeight-1-y)*GlyphWidth + (GlyphWidth-1-x)`
-- `getBit()` used standard ordering: `y*GlyphWidth + x`
-- `String()` used yet another scheme: `63-y*GlyphWidth-x`
-
-**Fix**: All three methods now use consistent row-major ordering: `y*GlyphWidth + x`
-
-### Important Notes on Glyph Matching
-
-1. **Font Quirks**: The IBM BIOS font has limitations:
-   - '|' character has a gap in the middle (row 3 is empty)
-   - '+' is offset to the left, not centered
-   - Many characters don't use the full 8x8 grid
-   - This means "obvious" matches may not work as expected
-
-2. **Testing**: The system includes comprehensive bitmap tests in `bitmap_consistency_test.go` to ensure bit ordering remains consistent
-
-3. **Not Integrated**: The glyph matching system exists but is not connected to the main img2ansi converter - it's a separate tool for analysis
-
-4. **Computational Complexity**: Going from 2x2 to 8x8 blocks would increase computation by ~40x:
-   - 16 patterns → 700+ characters
-   - 4 pixels → 64 pixels per block  
-   - Current optimizations (zones, caching) don't scale well to this complexity
+4. **Not integrated**: glyph rendering exists (`FontBitmaps.RenderBlocks`)
+   but no glyph *matcher* is wired into the converter. The old 70/20/10
+   similarity scorer is intentionally retired in favor of the
+   ideal-mask + weighted-Hamming (XOR/popcount) search described in
+   `docs/glyph-research/README.md`, which makes exhaustive matching
+   cheap instead of approximating it.
 
 ## Critical Implementation Notes
 

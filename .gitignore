@@ -9,3 +9,4 @@ edges.png
 # Build artifacts
 cmd/ansify/ansify
 cmd/compute_tables/compute_tables
+cmd/compute_glyphs/compute_glyphs
