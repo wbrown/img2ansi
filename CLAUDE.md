@@ -446,12 +446,26 @@ Key findings so far:
    `TestBlockGlyphsCoverDitherOutput` pins all 16 dither runes to their
    exact quadrant geometry.
 
-5. **Not integrated**: glyph rendering exists (`FontBitmaps.RenderBlocks`)
-   but no glyph *matcher* is wired into the converter. The old 70/20/10
-   similarity scorer is intentionally retired in favor of the
-   ideal-mask + weighted-Hamming (XOR/popcount) search described in
-   `docs/glyph-research/README.md`, which makes exhaustive matching
-   cheap instead of approximating it.
+5. **The matcher exists but is not wired into the CLI.**
+   `GlyphMatcher` (`glyphmatch.go`) implements the ideal-mask +
+   weighted-Hamming (XOR/popcount) search as a `BlockConverter` — it
+   replaced the retired 70/20/10 similarity scorer, and
+   `TestGlyphMatcherExactGlyph` pins exact glyph reproduction. The
+   harness scores it against the quadrant dither and the mean-color
+   floor (`TestConverterArms`); at 16 colors the quadrant dither still
+   wins everywhere, per the original research. No output path emits
+   glyph-matched ANSI yet.
+
+6. **The nearest-color machinery shipped broken for years (fixed).**
+   `buildKDTree` dropped colors via a depth cap (the ansi16 tree had 15
+   of 16 colors — pure black missing), and `nearestNeighbor` searched
+   with the wrong axes, wrapping uint8 arithmetic, and unit-mismatched
+   pruning; every embedded table mapped pure black to `#555555`. Found
+   through the glyph matcher's anchor probe. Tables are now built by
+   exact linear scan, the tree search is validated against a
+   linear-scan oracle (`kdtree_test.go`), and all `.palette` files were
+   regenerated. See `docs/glyph-research/README.md` for the full
+   anatomy.
 
 ## Critical Implementation Notes
 

@@ -3,6 +3,8 @@ package img2ansi
 import (
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	"math"
 	"os"
 	"path/filepath"
@@ -386,7 +388,9 @@ func photoSource(img *imageutil.RGBAImage) imageSource {
 // measureConverterArms runs each converter over the same cell grid and
 // scores every arm against the same reference at scorePxPerCell. Blur
 // sigma is expressed in cell widths so the metric is comparable across
-// converters regardless of their source resolution.
+// converters regardless of their source resolution. With DIFFUSION_PNGS
+// set, a labeled side-by-side comparison image (reference plus every
+// arm) is written alongside the per-arm renders.
 func measureConverterArms(
 	t *testing.T,
 	name string,
@@ -396,6 +400,9 @@ func measureConverterArms(
 ) map[string]float64 {
 	t.Helper()
 	reference, _ := src(cellsW*scorePxPerCell, cellsH*scorePxPerCell)
+
+	labels := []string{"reference"}
+	panels := []*imageutil.RGBAImage{reference}
 
 	results := make(map[string]float64)
 	for _, arm := range arms {
@@ -410,6 +417,9 @@ func measureConverterArms(
 		t.Logf("%-14s %-18s blurredΔE σ=0.5cell %6.2f  σ=1cell %6.2f",
 			name, arm.name, halfCell, oneCell)
 
+		labels = append(labels, fmt.Sprintf("%s dE=%.2f", arm.name, oneCell))
+		panels = append(panels, rendered)
+
 		if dir := os.Getenv("DIFFUSION_PNGS"); dir != "" {
 			path := filepath.Join(dir, fmt.Sprintf("%s_%s.png", name, arm.name))
 			if err := imageutil.SavePNG(rendered.RGBA, path); err != nil {
@@ -417,7 +427,60 @@ func measureConverterArms(
 			}
 		}
 	}
+
+	if dir := os.Getenv("DIFFUSION_PNGS"); dir != "" {
+		font, err := LoadEmbeddedFont("font8x8")
+		if err != nil {
+			t.Fatalf("loading label font: %v", err)
+		}
+		path := filepath.Join(dir, fmt.Sprintf("%s_compare.png", name))
+		if err := imageutil.SavePNG(composeComparison(font, labels, panels), path); err != nil {
+			t.Logf("could not save %s: %v", path, err)
+		}
+	}
 	return results
+}
+
+// composeComparison stacks labeled panels vertically into a single
+// comparison image. Labels are rendered through the font's own glyphs.
+func composeComparison(font *FontBitmaps, labels []string, panels []*imageutil.RGBAImage) *image.RGBA {
+	const gutter = 4
+	labelH := GlyphHeight
+
+	width, height := 0, gutter
+	for _, p := range panels {
+		if p.Width() > width {
+			width = p.Width()
+		}
+		height += labelH + 2 + p.Height() + gutter
+	}
+
+	dark := color.RGBA{24, 24, 24, 255}
+	out := image.NewRGBA(image.Rect(0, 0, width+2*gutter, height))
+	draw.Draw(out, out.Bounds(), &image.Uniform{dark}, image.Point{}, draw.Src)
+
+	y := gutter
+	for i, p := range panels {
+		row := make([]BlockRune, 0, len(labels[i]))
+		for _, ch := range labels[i] {
+			row = append(row, BlockRune{
+				Rune: ch,
+				FG:   RGB{255, 255, 255},
+				BG:   RGB{24, 24, 24},
+			})
+		}
+		lbl := font.RenderBlocks([][]BlockRune{row}, 1)
+		draw.Draw(out,
+			image.Rect(gutter, y, gutter+lbl.Bounds().Dx(), y+labelH),
+			lbl, image.Point{}, draw.Src)
+		y += labelH + 2
+
+		draw.Draw(out,
+			image.Rect(gutter, y, gutter+p.Width(), y+p.Height()),
+			p.RGBA, image.Point{}, draw.Src)
+		y += p.Height() + gutter
+	}
+	return out
 }
 
 // nearestFg maps a color to the nearest foreground palette color using
@@ -477,6 +540,7 @@ func TestConverterArms(t *testing.T) {
 
 	arms := []converterArm{
 		quadrantArm("quadrant-dither", r),
+		fontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
 		fontArm("mean-color-block", meanColorConverter{r}, font),
 	}
 
@@ -494,6 +558,16 @@ func TestConverterArms(t *testing.T) {
 		if res["quadrant-dither"] >= res["mean-color-block"] {
 			t.Errorf("%s: quadrant dither (ΔE %.2f) should beat the mean-color baseline (ΔE %.2f)",
 				p.name, res["quadrant-dither"], res["mean-color-block"])
+		}
+		// At 16 colors the matcher only ties the flat-block baseline on
+		// smooth synthetic ramps — one (fg, bg) pair per 8x8 cell cannot
+		// follow a gradient regardless of glyph, so the medium is the
+		// constraint (the original research finding). The invariant is
+		// that exhaustive matching is never meaningfully worse than the
+		// degenerate flat block, which is inside its search space.
+		if res["glyph-matcher"] > res["mean-color-block"]*1.05 {
+			t.Errorf("%s: glyph matcher (ΔE %.2f) should not lose to the mean-color baseline (ΔE %.2f)",
+				p.name, res["glyph-matcher"], res["mean-color-block"])
 		}
 	}
 

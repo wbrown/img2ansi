@@ -148,19 +148,23 @@ r := img2ansi.NewRenderer(
   set is the font's genuine glyph map.
 
 Measured cost of the CP437 restriction (16 blocks → 6, identical ansi16
-palette, blurred ΔE σ=2, `TestBlockAlphabetQuality`):
+palette, blurred ΔE σ=2, `TestBlockAlphabetQuality`, corrected tables):
 
 | image | 16-block | 6-block | restriction cost |
 |---|---|---|---|
-| gray-gradient | 2.54 | 3.42 | +35% |
+| gray-gradient | 2.54 | 3.34 | +32% |
 | fleshtone | 13.39 | 13.58 | +1% |
-| color-ramp | 9.66 | 10.00 | +4% |
+| color-ramp | 9.66 | 10.01 | +4% |
+| fox | 7.53 | 7.64 | +1% |
 | mandrill | 11.43 | 11.53 | +1% |
+| wheel | 9.30 | 8.12 | −13% |
 
 Error diffusion absorbs most of the loss on textured content; smooth
 grayscale ramps are where the quadrant patterns genuinely earn their
-keep. Practically: BBS mode's pattern restriction is nearly free for
-photos.
+keep, and on the flat saturated wedges of the color wheel the
+restricted alphabet actually wins — fewer pattern choices means less
+spurious quadrant texture for diffusion to clean up. Practically: BBS
+mode's pattern restriction is nearly free for photos.
 
 ## Findings carried over from the experiment log
 
@@ -195,38 +199,88 @@ converters over the same cell grid: each arm's input is prepared at its
 native source resolution, its output rendered back to pixels at a
 common 8 px/cell (quadrant geometry or font glyphs), and every arm is
 scored against the same reference with blur sigma expressed in *cell
-widths*, so numbers are comparable across source resolutions. The
-`Renderer` itself is the reference converter; `TestConverterArms` pins
-the floor with an 8×8 mean-color full-block baseline (blurred ΔE,
-σ = 1 cell, ansi16):
+widths*, so numbers are comparable across source resolutions. With
+`DIFFUSION_PNGS=<dir>` set, the harness writes a labeled side-by-side
+comparison image per test image (labels rendered through font8x8).
 
-| image | quadrant dither (2×2) | mean-color blocks (8×8) |
-|---|---|---|
-| gray-gradient | 2.52 | 10.54 |
-| fleshtone | 13.40 | 29.18 |
-| color-ramp | 9.65 | 26.43 |
-| mandrill | 11.56 | 19.64 |
+## The glyph matcher
 
-A glyph matcher enters the tournament by implementing `BlockConverter`
-and being added as a `fontArm` — nothing else. To justify itself it has
-to beat the mean-color floor decisively and approach (or beat, in its
-target regimes) the quadrant dither.
+`GlyphMatcher` (`glyphmatch.go`) implements the ideal-mask formulation
+that replaces the retired similarity scorer. For a candidate (fg, bg)
+pair, `δᵢ = d(pᵢ, fg) − d(pᵢ, bg)` per pixel; a glyph's total error is
+`base(bg) + idealSum + Σ_{mask XOR ideal} |δᵢ|`, so the best glyph is
+the one nearest the ideal mask `{i : δᵢ < 0}` under |δ|-weighted
+Hamming distance — one XOR plus a bit-iteration per glyph, with early
+exit. Exhaustive search over the font's genuine glyphs is exact and
+cheap (~22s for the full six-image harness including three photos).
+Candidate colors are the cell's dominant palette anchors (the heuristic
+the original research validated); `TestGlyphMatcherExactGlyph` pins the
+promise the old scorer never kept: a cell that IS a glyph matches that
+glyph.
+
+Current standings (blurred ΔE, σ = 1 cell, ansi16, `TestConverterArms`,
+measured with the corrected nearest-color tables):
+
+| image | quadrant dither (2×2) | glyph matcher (8×8) | mean-color blocks (8×8) |
+|---|---|---|---|
+| gray-gradient | 2.52 | 6.58 | 6.58 |
+| fleshtone | 13.40 | 29.34 | 29.18 |
+| color-ramp | 9.65 | 23.69 | 23.61 |
+| fox | 7.69 | 17.08 | 17.63 |
+| mandrill | 11.56 | 15.84 | 17.22 |
+| wheel | 9.29 | 24.49 | 24.38 |
+
+This sharpens the original lab's headline finding: at 16 colors the 2×2
+quadrant dither wins everywhere by roughly 2×, and exhaustive glyph
+matching beats the flat mean-color block only modestly on photos
+(mandrill −8%, fox −3%) while tying it on smooth ramps — one (fg, bg)
+pair per 8×8 cell cannot follow a gradient no matter which glyph is
+chosen. The medium, not the matching, is the constraint; an earlier
+draft of this table showed the matcher far ahead of the baseline, but
+that gap was an artifact of the baseline reading the then-broken
+nearest-color tables. The interesting question, per the original
+research, is what these standings look like at 256 colors.
 
 ## Where the matching should go next
 
-1. **Replace similarity scoring with the ideal-mask formulation.** For a
-   fixed (fg, bg) pair, let `δᵢ = d(pᵢ, fg) − d(pᵢ, bg)` per pixel. Any
-   glyph's error is a constant plus the sum of `δᵢ` over its set bits,
-   so the *ideal* mask is `{i : δᵢ < 0}` and the best glyph is the one
-   closest to it under |δ|-weighted Hamming distance. `GlyphBitmap` is
-   already a `uint64`: XOR + popcount makes true exhaustive matching
-   real-time instead of 5 minutes, and deletes the heuristic zoo. 'O'
-   matches circles because nothing approximates anymore. Wrap it in a
-   `BlockConverter` and the harness above scores it immediately.
+1. **256 colors.** The original research found 256 colors rescue 8×8
+   matching. The matcher is palette-agnostic — run the harness with
+   `ansi256` and see whether the gap to the quadrant dither closes.
 2. **Hybrid cells.** Glyph matching where structure is high and color
    variance low (line art, edges); 2×2 quadrant dithering elsewhere.
-   This was the most promising direction in the old lab notes and is
-   now measurable.
+   The `edges` argument of `Convert` is currently unused — it is the
+   natural input for the mode decision.
 3. **More fonts via ROM dumps.** `LoadROMFont` accepts the classic
    2048-byte CP437 format directly — bit-perfect, no rasterization, and
    covers the PETSCII/ATASCII/DOS font family this research targets.
+
+## The nearest-color defect (found via the matcher, fixed)
+
+The matcher's anchor probe exposed that every embedded table mapped
+pure black to `#555555`. Two compounding bugs, both pinned by tests in
+`kdtree_test.go`:
+
+- **`buildKDTree` dropped colors.** A `log2(n)+1` depth cap silently
+  discarded the remainder slice whenever duplicate component values
+  skewed the median — the shipped ansi16 tree contained 15 of 16
+  colors, and pure black (first in every sort order) was the one that
+  fell off. No search could return a color that was not in the tree.
+  The cap is gone; median splitting terminates naturally and every
+  color becomes a node (`TestBuildKDTreeContainsAllColors`).
+- **`nearestNeighbor` was wrong three ways.** It walked with `depth%3`
+  axes although the tree splits on per-node largest-range axes (the
+  stored `SplitAxis` was ignored), computed plane distance with
+  wrapping uint8 subtraction, and pruned *squared RGB* units against
+  *linear* method distances. The traversal now honors `SplitAxis`, uses
+  float arithmetic, and prunes with per-method lower bounds (exact for
+  RGB; weight floors for Redmean; LAB and custom methods never prune —
+  palettes are small enough that full traversal is cheap). Validated
+  against a linear-scan oracle over all palettes and methods
+  (`TestNearestNeighborMatchesLinearScan`).
+
+Tables are now built by exact linear scan (the table is the product and
+must be exact; the tree remains a runtime structure), and every
+`.palette` file was regenerated. Consequences of the old defect: cache
+keys quantized through wrong anchors, and >32-color candidate search
+could never propose dropped colors — dark regions in ansi256 output
+systematically avoided true black.
