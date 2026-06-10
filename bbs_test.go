@@ -5,95 +5,35 @@ import (
 	"testing"
 )
 
-func TestBbsFgCode(t *testing.T) {
+func TestBbsSGR(t *testing.T) {
 	tests := []struct {
-		input    string
+		fg       string
+		bg       string
+		ice      bool
 		expected string
 	}{
-		// Standard colors get 0; prefix to clear sticky bold
-		{"30", "0;30"},
-		{"31", "0;31"},
-		{"32", "0;32"},
-		{"33", "0;33"},
-		{"34", "0;34"},
-		{"35", "0;35"},
-		{"36", "0;36"},
-		{"37", "0;37"},
-		// Bright colors become 1;3x (bold + standard)
-		{"90", "1;30"},
-		{"91", "1;31"},
-		{"92", "1;32"},
-		{"93", "1;33"},
-		{"94", "1;34"},
-		{"95", "1;35"},
-		{"96", "1;36"},
-		{"97", "1;37"},
+		// Standard colors always lead with a reset so bold/blink never stick
+		{"30", "40", false, "\x1b[0;30;40m"},
+		{"37", "47", false, "\x1b[0;37;47m"},
+		// Bright foregrounds become bold + standard color
+		{"90", "40", false, "\x1b[0;1;30;40m"},
+		{"91", "41", false, "\x1b[0;1;31;41m"},
+		{"97", "47", false, "\x1b[0;1;37;47m"},
+		// Bright backgrounds fall back to standard without iCE
+		{"31", "100", false, "\x1b[0;31;40m"},
+		{"31", "107", false, "\x1b[0;31;47m"},
+		// Bright backgrounds become blink + standard color with iCE
+		{"31", "100", true, "\x1b[0;5;31;40m"},
+		{"31", "107", true, "\x1b[0;5;31;47m"},
+		// Bold and blink combine
+		{"91", "101", true, "\x1b[0;1;5;31;41m"},
 	}
 
 	for _, tt := range tests {
-		result := bbsFgCode(tt.input)
+		result := bbsSGR(tt.fg, tt.bg, tt.ice)
 		if result != tt.expected {
-			t.Errorf("bbsFgCode(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
-func TestBbsBgCodeWithICE(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		// Standard BG colors pass through
-		{"40", "40"},
-		{"41", "41"},
-		{"42", "42"},
-		{"43", "43"},
-		{"44", "44"},
-		{"45", "45"},
-		{"46", "46"},
-		{"47", "47"},
-		// Bright BG colors become 5;4x with iCE
-		{"100", "5;40"},
-		{"101", "5;41"},
-		{"102", "5;42"},
-		{"103", "5;43"},
-		{"104", "5;44"},
-		{"105", "5;45"},
-		{"106", "5;46"},
-		{"107", "5;47"},
-	}
-
-	for _, tt := range tests {
-		result := bbsBgCode(tt.input, true)
-		if result != tt.expected {
-			t.Errorf("bbsBgCode(%q, true) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
-func TestBbsBgCodeWithoutICE(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		// Standard BG colors pass through
-		{"40", "40"},
-		{"47", "47"},
-		// Bright BG colors fall back to standard without iCE
-		{"100", "40"},
-		{"101", "41"},
-		{"102", "42"},
-		{"103", "43"},
-		{"104", "44"},
-		{"105", "45"},
-		{"106", "46"},
-		{"107", "47"},
-	}
-
-	for _, tt := range tests {
-		result := bbsBgCode(tt.input, false)
-		if result != tt.expected {
-			t.Errorf("bbsBgCode(%q, false) = %q, want %q", tt.input, result, tt.expected)
+			t.Errorf("bbsSGR(%q, %q, %v) = %q, want %q",
+				tt.fg, tt.bg, tt.ice, result, tt.expected)
 		}
 	}
 }
@@ -124,9 +64,10 @@ func TestUnicodeToCP437Mapping(t *testing.T) {
 }
 
 func TestCompressBBSProducesValidOutput(t *testing.T) {
-	// Create a simple renderer with ansi16 palette for testing
+	// iCE colors with the full ansi16 palette (16 background colors)
 	r := NewRenderer(
-		WithBBSMode(true),
+		WithBBSMode(),
+		WithICEColors(),
 		WithPalette("ansi16"),
 	)
 
@@ -171,13 +112,14 @@ func TestCompressBBSProducesValidOutput(t *testing.T) {
 		t.Error("Output contains multi-byte UTF-8 block characters - should be CP437 single bytes")
 	}
 
-	// Verify escape codes use legacy BBS format
-	// Should contain "0;" or "1;" prefixes, not bare "9x" codes
-	outputStr := string(output)
+	// Verify escape codes use legacy BBS format: bright colors must be
+	// expressed via bold/blink attributes, not modern 9x/10x codes
 	if bytes.Contains(output, []byte("\x1b[91")) {
 		t.Error("Output should not contain modern bright FG codes like ESC[91")
 	}
-	_ = outputStr
+	if bytes.Contains(output, []byte("101")) {
+		t.Error("Output should not contain modern bright BG codes like 101")
+	}
 
 	// Verify reset at end of each line
 	lines := bytes.Split(output, []byte("\r\n"))
@@ -193,11 +135,11 @@ func TestCompressBBSProducesValidOutput(t *testing.T) {
 
 func TestBBSModeBlockSet(t *testing.T) {
 	r := NewRenderer(
-		WithBBSMode(true),
-		WithPalette("ansi16"),
+		WithBBSMode(),
+		WithPalette("ansi16bbs"),
 	)
 
-	blocks := r.getBlocks()
+	blocks := r.blocks
 
 	// Should have exactly 6 blocks
 	if len(blocks) != 6 {
@@ -217,7 +159,7 @@ func TestDefaultBlockSetUnchanged(t *testing.T) {
 		WithPalette("ansi16"),
 	)
 
-	blocks := r.getBlocks()
+	blocks := r.blocks
 
 	// Default should still have 16 blocks
 	if len(blocks) != 16 {
@@ -230,7 +172,7 @@ func TestDefaultBlockSetUnchanged(t *testing.T) {
 // a background color that silently loses brightness without iCE.
 func TestCompressBBSBrightForegroundFullBlock(t *testing.T) {
 	r := NewRenderer(
-		WithBBSMode(false),
+		WithBBSMode(),
 		WithPalette("ansi16bbs"),
 	)
 
@@ -255,7 +197,7 @@ func TestCompressBBSBrightForegroundFullBlock(t *testing.T) {
 // foreground on a full block, not a bright background under a space.
 func TestBBSSearchUsesBoldForBrightSolid(t *testing.T) {
 	r := NewRenderer(
-		WithBBSMode(false),
+		WithBBSMode(),
 		WithPalette("ansi16bbs"),
 	)
 

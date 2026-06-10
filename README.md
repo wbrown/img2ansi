@@ -129,12 +129,17 @@ to compensate for the fact that characters are taller than they are wide.
 The `-bbs` flag produces BBS-compatible `.ANS` files with CP437 encoding, legacy
 ANSI escape codes (`ESC[1;3xm` for bright foreground, `ESC[5;4xm` for bright
 background), and CR+LF line endings. Only the 6 block characters available in
-CP437 are used (space, `▀`, `▄`, `▌`, `▐`, `█`). BBS mode forces the `ansi16`
-palette.
+CP437 are used (space, `▀`, `▄`, `▌`, `▐`, `█`).
+
+Without iCE colors a BBS can only display 8 background colors, so plain `-bbs`
+uses the `ansi16bbs` palette (16 foreground / 8 background colors). Bright
+areas are still reachable: the encoder expresses them as bold foregrounds on
+full and half blocks.
 
 The `-ice` flag enables iCE colors, which repurposes the blink attribute to
-allow 16 background colors instead of 8. The viewer must support iCE colors
-(e.g. SyncTERM, PabloDraw) or bright backgrounds will blink instead.
+allow 16 background colors instead of 8, and switches to the full `ansi16`
+palette. The viewer must support iCE colors (e.g. SyncTERM, PabloDraw) or
+bright backgrounds will blink instead.
 
 ```
   -bbs
@@ -156,7 +161,7 @@ allow 16 background colors instead of 8. The viewer must support iCE colors
   -output string
     	Path to save the output (if not specified, prints to stdout)
   -palette string
-    	Path to the palette file (Embedded: ansi16, ansi256, jetbrains32) (default "ansi16")
+    	Path to the palette file (Embedded: ansi16, ansi16bbs, ansi256, jetbrains32) (default "ansi16")
   -scale float
     	Scale factor for the output image (default 2)
   -width int
