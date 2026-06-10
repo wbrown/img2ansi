@@ -92,6 +92,72 @@ func TestGlyphMatcherFlatCell(t *testing.T) {
 	}
 }
 
+// TestGlyphMatcherDiffusion verifies the diffusion mechanics: residuals
+// of exactly-representable input are zero (so diffusion is a no-op and
+// does not mutate the image), residuals of off-palette input propagate
+// to later cells (so output differs from the undiffused matcher), and
+// the whole process is deterministic.
+func TestGlyphMatcherDiffusion(t *testing.T) {
+	r := NewRenderer(WithPalette("ansi16"))
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plain := NewGlyphMatcher(r, font)
+	diffused := NewGlyphMatcher(r, font)
+	diffused.Diffusion = true
+
+	// Exactly-representable input: a flat field of a palette color has
+	// zero residual everywhere; diffusion must change nothing.
+	red := RGB{0xAA, 0x00, 0x00}
+	flat := imageutil.NewRGBAImage(32, 16)
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 32; x++ {
+			flat.SetRGB(x, y, imageutil.RGB{R: red.R, G: red.G, B: red.B})
+		}
+	}
+	edges := imageutil.NewGrayImage(32, 16)
+	a := plain.Convert(flat.Clone(), edges)
+	b := diffused.Convert(flat.Clone(), edges)
+	for cy := range a {
+		for cx := range a[cy] {
+			if a[cy][cx] != b[cy][cx] {
+				t.Fatalf("diffusion changed output on zero-residual input at (%d,%d)", cx, cy)
+			}
+		}
+	}
+
+	// Off-palette ramp: residuals are nonzero, so diffusion must change
+	// later cells relative to the undiffused matcher.
+	ramp := makeFleshtone(64, 16)
+	rampEdges := imageutil.NewGrayImage(64, 16)
+	a = plain.Convert(ramp.Clone(), rampEdges)
+	b = diffused.Convert(ramp.Clone(), rampEdges)
+	same := true
+	for cy := range a {
+		for cx := range a[cy] {
+			if a[cy][cx] != b[cy][cx] {
+				same = false
+			}
+		}
+	}
+	if same {
+		t.Error("diffusion produced identical output on an off-palette ramp")
+	}
+
+	// Deterministic with diffusion on.
+	c := diffused.Convert(ramp.Clone(), rampEdges)
+	d := diffused.Convert(ramp.Clone(), rampEdges)
+	for cy := range c {
+		for cx := range c[cy] {
+			if c[cy][cx] != d[cy][cx] {
+				t.Fatalf("diffused matching is non-deterministic at (%d,%d)", cx, cy)
+			}
+		}
+	}
+}
+
 // TestGlyphMatcherDeterministic guards the sorted-glyph and sorted-
 // anchor tie-breaking: identical input must produce identical output.
 func TestGlyphMatcherDeterministic(t *testing.T) {

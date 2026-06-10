@@ -565,6 +565,8 @@ func TestConverterArms(t *testing.T) {
 	for _, pal := range []string{"ansi16", "ansi256"} {
 		t.Run(pal, func(t *testing.T) {
 			r := NewRenderer(WithPalette(pal))
+			diffusedMatcher := NewGlyphMatcher(r, font)
+			diffusedMatcher.Diffusion = true
 			arms := []converterArm{
 				quadrantArm("quadrant-dither", r),
 				{
@@ -575,6 +577,7 @@ func TestConverterArms(t *testing.T) {
 					},
 				},
 				fontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
+				fontArm("glyph-matcher-diff", diffusedMatcher, font),
 				fontArm("mean-color-block", meanColorConverter{r}, font),
 			}
 
@@ -594,6 +597,17 @@ func TestConverterArms(t *testing.T) {
 				if res["glyph-matcher"] > res["mean-color-block"]*1.05 {
 					t.Errorf("%s/%s: glyph matcher (ΔE %.2f) should not lose to the mean-color baseline (ΔE %.2f)",
 						p.name, pal, res["glyph-matcher"], res["mean-color-block"])
+				}
+				// Diffusion's job is local tone on content the palette
+				// cannot represent exactly; on those ramps it must beat
+				// the undiffused matcher by a wide margin. The gray
+				// gradient is excluded: at 256 colors it is nearly
+				// exactly representable, and diffusing sub-quantum
+				// residuals adds noise (measured: 0.36 -> 0.62).
+				if p.name != "gray-gradient" &&
+					res["glyph-matcher-diff"] >= res["glyph-matcher"] {
+					t.Errorf("%s/%s: diffused matcher (ΔE %.2f) should beat the undiffused matcher (ΔE %.2f)",
+						p.name, pal, res["glyph-matcher-diff"], res["glyph-matcher"])
 				}
 			}
 

@@ -1,6 +1,3 @@
-# Local test photo corpus for diffusion_quality_test.go (not committed)
-images/
-
 # Debug output written by the conversion pipeline
 resized.png
 dithered.png
