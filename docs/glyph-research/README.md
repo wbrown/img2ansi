@@ -219,6 +219,27 @@ the original research validated); `TestGlyphMatcherExactGlyph` pins the
 promise the old scorer never kept: a cell that IS a glyph matches that
 glyph.
 
+### Alphabet restriction
+
+`RestrictAlphabet(runes)` limits the candidate glyphs to the given
+runes ∩ the font's genuine glyphs (nil restores the full set; an empty
+intersection is rejected). Preset ranges compose with `append`:
+`AlphabetBlocks` (block elements + shades + space), `AlphabetBoxDrawing`,
+`AlphabetASCII`.
+
+This exists because of a finding that masqueraded as an off-by-one:
+font8x8's letterforms reserve column 7 (and mostly row 7) as the
+typographic spacing column, so when the exact search deploys 'a'/'z'/'Q'
+as dither texture over smooth photo regions, each such cell carries a
+grid-aligned 1px background gutter — visually a systematic shift,
+though the registration is pixel-true (`TestGlyphMatcherMultiCellRoundTrip`
+pins it). Measured on mandrill-ansi256 with diffusion: full alphabet
+ΔE 3.79, blocks+box 3.83, ASCII-only 4.11 — alphabet choice is an
+aesthetics knob, nearly free on tone; letterforms are not a fidelity
+source. The hybrid converter (roadmap #1) removes smooth regions from
+glyph duty entirely. Side-by-side:
+[comparisons/mandrill-ansi256_alphabets.png](comparisons/mandrill-ansi256_alphabets.png).
+
 A dither-vs-matcher comparison conflates two variables: the cell
 REPRESENTATION (2×2 quadrants vs 8×8 glyphs) and ERROR DIFFUSION (the
 dither has it, the matcher does not yet). The harness therefore carries

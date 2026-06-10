@@ -725,10 +725,12 @@ Key findings so far:
    `GlyphMatcher` (`glyphmatch.go`) implements the ideal-mask +
    weighted-Hamming (XOR/popcount) search as a `BlockConverter` — it
    replaced the retired 70/20/10 similarity scorer, and
-   `TestGlyphMatcherExactGlyph` pins exact glyph reproduction. The
-   harness scores it against the quadrant dither and the mean-color
-   floor (`TestConverterArms`); at 16 colors the quadrant dither still
-   wins everywhere, per the original research. No output path emits
+   `TestGlyphMatcherExactGlyph` pins exact glyph reproduction.
+   `RestrictAlphabet` + the `Alphabet*` presets narrow the candidate
+   set (alphabet ∩ genuine glyphs — letterforms' spacing columns read
+   as 1px gutters on photos and are an aesthetic, not a fidelity
+   source). The harness scores it against the quadrant dither and the
+   mean-color floor (`TestConverterArms`). No output path emits
    glyph-matched ANSI yet.
 
 6. **The nearest-color machinery shipped broken for years (fixed).**

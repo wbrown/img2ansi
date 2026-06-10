@@ -1,6 +1,7 @@
 package img2ansi
 
 import (
+	"fmt"
 	"math"
 	"math/bits"
 	"sort"
@@ -58,29 +59,85 @@ type GlyphMatcher struct {
 
 var _ BlockConverter = (*GlyphMatcher)(nil)
 
+// Alphabet presets for RestrictAlphabet. Each is a rune range that the
+// matcher intersects with the font's genuine glyphs; combine them with
+// append. The full genuine set is the default.
+//
+// AlphabetBlocks has no typographic spacing columns — every glyph's ink
+// can reach all 8 columns and rows — so it avoids the 1px cell gutters
+// that letterforms produce when used as area texture on photographs
+// (letterform glyphs reserve column 7 for inter-character spacing).
+// Restricting to blocks + box drawing measured tone-neutral against
+// the full set on the blurred-ΔE harness; letterforms are an aesthetic
+// choice, not a fidelity source.
+var (
+	// AlphabetBlocks: block elements and shades (U+2580–259F) plus space.
+	AlphabetBlocks = alphabetRange(0x2580, 0x259F, ' ')
+	// AlphabetBoxDrawing: box drawing (U+2500–257F).
+	AlphabetBoxDrawing = alphabetRange(0x2500, 0x257F)
+	// AlphabetASCII: printable ASCII — classic text-art output.
+	AlphabetASCII = alphabetRange(0x20, 0x7E)
+)
+
+func alphabetRange(lo, hi rune, extra ...rune) []rune {
+	runes := make([]rune, 0, int(hi-lo)+1+len(extra))
+	for r := lo; r <= hi; r++ {
+		runes = append(runes, r)
+	}
+	return append(runes, extra...)
+}
+
 // NewGlyphMatcher builds a matcher over the font's genuine glyph set
-// using the renderer's palette and color distance method.
+// using the renderer's palette and color distance method. Use
+// RestrictAlphabet to narrow the candidate glyphs.
 func NewGlyphMatcher(r *Renderer, font *FontBitmaps) *GlyphMatcher {
 	m := &GlyphMatcher{
 		renderer:   r,
 		font:       font,
 		MaxAnchors: 6,
 	}
+	// Cannot fail: the font loaders never produce an empty glyph set.
+	_ = m.RestrictAlphabet(nil)
+	return m
+}
 
-	// Sorted for deterministic tie-breaking between equal-cost glyphs.
-	runes := font.Runes()
-	sort.Slice(runes, func(i, j int) bool { return runes[i] < runes[j] })
-	for _, ru := range runes {
-		g, ok := font.GenuineGlyph(ru)
-		if !ok {
+// RestrictAlphabet limits the candidate glyphs to the given runes,
+// intersected with the font's genuine glyphs — the search space never
+// exceeds what the font provides, and synthesized glyphs never count
+// (the same rule as WithBlocksFromFont). Passing nil restores the
+// font's full genuine set. If the intersection is empty an error is
+// returned and the current alphabet is kept.
+func (m *GlyphMatcher) RestrictAlphabet(alphabet []rune) error {
+	candidates := alphabet
+	if candidates == nil {
+		candidates = m.font.Runes()
+	}
+	// Sorted copy for deterministic tie-breaking between equal-cost
+	// glyphs (and so the caller's slice is left untouched).
+	sorted := append([]rune{}, candidates...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	var runes []rune
+	var masks []uint64
+	seen := make(map[rune]bool, len(sorted))
+	for _, ru := range sorted {
+		if seen[ru] {
 			continue
 		}
-		m.runes = append(m.runes, ru)
-		m.masks = append(m.masks, uint64(g))
+		seen[ru] = true
+		if g, ok := m.font.GenuineGlyph(ru); ok {
+			runes = append(runes, ru)
+			masks = append(masks, uint64(g))
+		}
+	}
+	if len(runes) == 0 {
+		return fmt.Errorf("alphabet shares no genuine glyphs with font %s", m.font.Name())
 	}
 
+	m.runes, m.masks = runes, masks
+
 	// Rune for flat cells (fg == bg renders identically under any
-	// glyph; prefer the full block when the font has one).
+	// glyph; prefer the full block when the alphabet has one).
 	m.flatRune = m.runes[0]
 	for gi, mask := range m.masks {
 		if mask == ^uint64(0) {
@@ -88,7 +145,7 @@ func NewGlyphMatcher(r *Renderer, font *FontBitmaps) *GlyphMatcher {
 			break
 		}
 	}
-	return m
+	return nil
 }
 
 // SourcePixelsPerCell implements BlockConverter: each character cell
