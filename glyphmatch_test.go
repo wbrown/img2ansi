@@ -222,6 +222,69 @@ func TestGlyphMatcherMultiCellRoundTrip(t *testing.T) {
 	}
 }
 
+// TestGlyphMatcherRestrictAlphabet verifies the alphabet knob: the
+// candidate set is the requested runes ∩ genuine glyphs, output never
+// strays outside it, an empty intersection is rejected without
+// clobbering the current alphabet, and nil restores the full set.
+func TestGlyphMatcherRestrictAlphabet(t *testing.T) {
+	r := NewRenderer(WithPalette("ansi16"))
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewGlyphMatcher(r, font)
+	fullCount := len(m.runes)
+
+	if err := m.RestrictAlphabet(AlphabetBlocks); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.runes) == 0 || len(m.runes) >= fullCount {
+		t.Fatalf("blocks alphabet should be a proper subset: %d of %d",
+			len(m.runes), fullCount)
+	}
+	allowed := make(map[rune]bool, len(m.runes))
+	for _, ru := range m.runes {
+		if ru != ' ' && (ru < 0x2580 || ru > 0x259F) {
+			t.Errorf("rune %q escaped the blocks alphabet", ru)
+		}
+		allowed[ru] = true
+	}
+
+	// Output stays inside the alphabet.
+	ramp := makeColorRamp(64, 32)
+	blocks := m.Convert(ramp, imageutil.NewGrayImage(64, 32))
+	for _, row := range blocks {
+		for _, cell := range row {
+			if !allowed[cell.Rune] {
+				t.Fatalf("matcher emitted %q outside the restricted alphabet", cell.Rune)
+			}
+		}
+	}
+
+	// Empty intersection: error, alphabet unchanged.
+	before := len(m.runes)
+	if err := m.RestrictAlphabet([]rune{'あ'}); err == nil {
+		t.Error("alphabet with no genuine glyphs should be rejected")
+	}
+	if len(m.runes) != before {
+		t.Errorf("failed restriction clobbered the alphabet: %d -> %d",
+			before, len(m.runes))
+	}
+
+	// The caller's preset slice must not be reordered by the call.
+	if AlphabetBlocks[len(AlphabetBlocks)-1] != ' ' {
+		t.Error("RestrictAlphabet mutated the caller's slice")
+	}
+
+	// nil restores the full genuine set.
+	if err := m.RestrictAlphabet(nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.runes) != fullCount {
+		t.Errorf("nil should restore the full set: %d of %d", len(m.runes), fullCount)
+	}
+}
+
 // TestGlyphMatcherDeterministic guards the sorted-glyph and sorted-
 // anchor tie-breaking: identical input must produce identical output.
 func TestGlyphMatcherDeterministic(t *testing.T) {
