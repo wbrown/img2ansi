@@ -44,6 +44,16 @@ type GlyphMatcher struct {
 	// colors by pixel frequency), and with it the pair search width.
 	// Clamped to 8.
 	MaxAnchors int
+
+	// Diffusion enables Floyd-Steinberg error diffusion across cells:
+	// after a cell's (glyph, fg, bg) is decided, each source pixel's
+	// residual against the color it renders as is diffused to
+	// neighboring source pixels with the same weights the quadrant
+	// dither uses, letting later cells compensate. Residual portions
+	// landing inside the already-decided cell are dead writes, exactly
+	// as at the quadrant dither's block boundaries. Enabling this makes
+	// Convert mutate its input image.
+	Diffusion bool
 }
 
 var _ BlockConverter = (*GlyphMatcher)(nil)
@@ -88,6 +98,8 @@ func (m *GlyphMatcher) SourcePixelsPerCell() int {
 }
 
 // Convert implements BlockConverter. The edge map is currently unused.
+// With Diffusion enabled, img is mutated as cells are processed in
+// raster order.
 func (m *GlyphMatcher) Convert(img *imageutil.RGBAImage, edges *imageutil.GrayImage) [][]BlockRune {
 	k := GlyphWidth
 	cellsH, cellsW := img.Height()/k, img.Width()/k
@@ -95,15 +107,46 @@ func (m *GlyphMatcher) Convert(img *imageutil.RGBAImage, edges *imageutil.GrayIm
 	for cy := range out {
 		out[cy] = make([]BlockRune, cellsW)
 		for cx := range out[cy] {
-			out[cy][cx] = m.matchCell(img, cx*k, cy*k)
+			cell, mask := m.matchCell(img, cx*k, cy*k)
+			out[cy][cx] = cell
+			if m.Diffusion {
+				m.diffuseCellResidual(img, cx*k, cy*k, cell, mask)
+			}
 		}
 	}
 	return out
 }
 
+// diffuseCellResidual measures each source pixel's residual against the
+// color it renders as under the chosen (glyph, fg, bg) and diffuses it
+// with the quadrant dither's Floyd-Steinberg weights via
+// distributeError. Only the portions that cross into not-yet-decided
+// cells have any effect; in-cell targets are dead writes, matching the
+// 2x2 dither's behavior at its own block boundaries.
+func (m *GlyphMatcher) diffuseCellResidual(
+	img *imageutil.RGBAImage,
+	x0, y0 int,
+	cell BlockRune,
+	mask GlyphBitmap,
+) {
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			p := img.GetRGB(x0+x, y0+y)
+			target := cell.BG
+			if mask.Bit(x, y) {
+				target = cell.FG
+			}
+			residual := RGB{p.R, p.G, p.B}.subtractToError(target)
+			distributeError(img, y0+y, x0+x, residual, false)
+		}
+	}
+}
+
 // matchCell finds the (glyph, fg, bg) with minimum total color error
-// for the 8x8 cell at (x0, y0).
-func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) BlockRune {
+// for the 8x8 cell at (x0, y0), returning the chosen cell and the
+// winning glyph's mask (which diffusion needs to know each pixel's
+// rendered color).
+func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRune, GlyphBitmap) {
 	const n = GlyphWidth * GlyphHeight
 
 	var pixels [n]RGB
@@ -139,8 +182,10 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) BlockRune
 		anchors = append(anchors, meanAnchor)
 	}
 	if len(anchors) == 1 {
-		// Flat cell: with fg == bg every glyph renders identically.
-		return BlockRune{Rune: m.flatRune, FG: anchors[0], BG: anchors[0]}
+		// Flat cell: with fg == bg every glyph renders identically, and
+		// the mask is irrelevant for the same reason.
+		return BlockRune{Rune: m.flatRune, FG: anchors[0], BG: anchors[0]},
+			^GlyphBitmap(0)
 	}
 
 	// Distance matrix: pixel x anchor, computed once per cell and
@@ -154,6 +199,7 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) BlockRune
 
 	best := math.Inf(1)
 	var bestRune rune
+	var bestMask GlyphBitmap
 	var bestFG, bestBG RGB
 
 	var absDelta [n]float64
@@ -194,6 +240,7 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) BlockRune
 				if xor == 0 && cost < best {
 					best = cost
 					bestRune = m.runes[gi]
+					bestMask = GlyphBitmap(mask)
 					bestFG = anchors[f]
 					bestBG = anchors[b]
 				}
@@ -201,7 +248,7 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) BlockRune
 		}
 	}
 
-	return BlockRune{Rune: bestRune, FG: bestFG, BG: bestBG}
+	return BlockRune{Rune: bestRune, FG: bestFG, BG: bestBG}, bestMask
 }
 
 func (m *GlyphMatcher) maxAnchors() int {

@@ -673,9 +673,13 @@ Key findings so far:
   **Representation**: 2×2 quadrants and exhaustive 8×8 glyph matching
   are near parity — the matcher ties or wins on most images at 256
   colors, consistent with the original research. **Diffusion**: worth
-  2–4× on the blurred-ΔE metric, growing with palette size, and the
-  full dither's entire practical lead — the matcher does not have it
-  yet. See the standings tables in `docs/glyph-research/README.md`.
+  2–4× on the blurred-ΔE metric and now implemented on both sides
+  (`GlyphMatcher.Diffusion`); with it, the diffused matcher lands
+  within 4–9% of the quadrant dither at 256 colors and beats it on the
+  16-color gray gradient. Known exception: diffusion worsens
+  near-exactly-representable content (ansi256 gradient) — sub-quantum
+  residuals diffuse as noise. See the standings tables in
+  `docs/glyph-research/README.md`.
 - Simple heuristics (DominantColorSelector) are near-optimal at 256
   colors — validated by true exhaustive search. The constraint is the
   medium, not the algorithms.

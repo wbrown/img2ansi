@@ -229,63 +229,71 @@ corrected nearest-color tables):
 
 ansi16:
 
-| image | 2×2 dither | 2×2 no-diffusion | 8×8 matcher | 8×8 flat blocks |
-|---|---|---|---|---|
-| gray-gradient | 2.52 | 6.58 | 6.58 | 6.58 |
-| fleshtone | 13.40 | 29.31 | 29.34 | 29.18 |
-| color-ramp | 9.65 | 23.69 | 23.69 | 23.61 |
-| fox | 7.69 | 15.32 | 17.08 | 17.63 |
-| mandrill | 11.56 | 14.92 | 15.82 | 17.22 |
-| wheel | 9.29 | 23.41 | 24.49 | 24.38 |
+| image | 2×2 dither | 2×2 no-diffusion | 8×8 matcher | 8×8 matcher+diffusion | 8×8 flat blocks |
+|---|---|---|---|---|---|
+| gray-gradient | 2.52 | 6.58 | 6.58 | **2.37** | 6.58 |
+| fleshtone | 13.40 | 29.31 | 29.34 | 16.80 | 29.18 |
+| color-ramp | 9.65 | 23.69 | 23.69 | 13.37 | 23.61 |
+| fox | 7.69 | 15.32 | 17.08 | 10.82 | 17.63 |
+| mandrill | 11.56 | 14.92 | 15.82 | 12.77 | 17.22 |
+| wheel | 9.29 | 23.41 | 24.49 | 13.68 | 24.38 |
 
 ansi256:
 
-| image | 2×2 dither | 2×2 no-diffusion | 8×8 matcher | 8×8 flat blocks |
-|---|---|---|---|---|
-| gray-gradient | 0.29 | 0.36 | 0.36 | 0.38 |
-| fleshtone | 3.97 | 11.00 | 10.82 | 11.06 |
-| color-ramp | 2.70 | 7.81 | 7.77 | 8.09 |
-| fox | 3.81 | 7.93 | 9.18 | 9.77 |
-| mandrill | 3.52 | 5.64 | 5.57 | 7.17 |
-| wheel | 2.40 | 10.54 | 11.39 | 11.47 |
+| image | 2×2 dither | 2×2 no-diffusion | 8×8 matcher | 8×8 matcher+diffusion | 8×8 flat blocks |
+|---|---|---|---|---|---|
+| gray-gradient | 0.29 | 0.36 | 0.36 | 0.62 | 0.38 |
+| fleshtone | 3.97 | 11.00 | 10.82 | **4.12** | 11.06 |
+| color-ramp | 2.70 | 7.81 | 7.77 | **3.78** | 8.09 |
+| fox | 3.81 | 7.93 | 9.18 | **4.76** | 9.77 |
+| mandrill | 3.52 | 5.64 | 5.57 | **3.79** | 7.17 |
+| wheel | 2.40 | 10.54 | 11.39 | 5.23 | 11.47 |
 
-Reading the two factors apart:
+Reading the factors apart:
 
 - **Representation (2×2 no-diffusion vs 8×8 matcher, apples to
   apples):** near parity. At 16 colors they tie on every synthetic ramp
   and 2×2 leads by 5–11% on photos. At 256 colors the matcher *ties or
-  wins* on four of six images (mandrill 5.57 vs 5.64, fleshtone 10.82
-  vs 11.00) and trails moderately on fox and the wheel. This is
-  consistent with the original lab's conclusion that 256 colors close
-  the representation gap — an earlier draft of this section claimed the
-  opposite by comparing the diffused dither against the undiffused
-  matcher and attributing the whole gap to representation.
-- **Diffusion:** the dominant factor, worth 2–4× on this metric
-  (mandrill-256: 5.64 → 3.52 from diffusion alone), and it grows with
-  palette size because diffusion exploits finer palettes. The full
-  dither's practical lead over the matcher is essentially this term.
-
-Which makes the highest-leverage next step obvious: give the matcher
-error diffusion. The representation is already competitive; the missing
-2–4× is a mechanism, not a limitation of glyphs.
+  wins* on four of six images — consistent with the original lab's
+  conclusion that 256 colors close the representation gap. (An earlier
+  draft claimed the opposite by comparing the diffused dither against
+  the undiffused matcher.)
+- **Diffusion:** the dominant factor, worth 2–4× on this metric, and —
+  now measured on both sides — a *mechanism*, not a property of either
+  representation. `GlyphMatcher.Diffusion` diffuses each cell's
+  per-pixel residuals (against the rendered glyph colors, via the same
+  `distributeError` weights as the quadrant dither) into undecided
+  neighboring cells.
+- **With diffusion on both sides the modes are nearly equivalent.** The
+  diffused matcher lands within 4–9% of the full quadrant dither at 256
+  colors on photos and ramps (mandrill 3.79 vs 3.52, fleshtone 4.12 vs
+  3.97), and *beats* the dither outright on the 16-color gray gradient
+  (2.37 vs 2.52 — finer spatial masks pay off when the palette is
+  coarse). The remaining real gap is wheel-style flat saturated regions
+  (5.23 vs 2.40), where 2 px cells simply track hue boundaries better
+  than 8 px cells.
+- **One measured regression, kept deliberately visible:** on the
+  ansi256 gray gradient, diffusion *worsens* the matcher (0.36 → 0.62).
+  The gradient is nearly exactly representable at 256 colors, so the
+  residuals are sub-quantum and diffusing them just adds noise — the
+  classic "don't dither what you can represent" effect. The harness
+  assertion excludes this case explicitly.
 
 ## Where the matching should go next
 
-1. **Error diffusion for the matcher.** The control arm shows diffusion
-   is worth 2–4× on the blurred-ΔE metric and is essentially the entire
-   practical lead of the 2×2 dither — while the representations are at
-   parity at 256 colors. Diffusing each cell's residual (against its
-   rendered glyph) into neighboring cells gives the matcher the same
-   lever; the quantified ceiling makes this the highest-leverage
-   experiment in the lab.
-2. **Hybrid cells.** Glyph matching where structure is high and color
+1. **Hybrid cells.** Glyph matching where structure is high and color
    variance low (line art, edges); 2×2 quadrant dithering elsewhere.
    The `edges` argument of `Convert` is currently unused — it is the
-   natural input for the mode decision.
-3. **A structure-sensitive referee.** Blurred ΔE measures tone; glyph
+   natural input for the mode decision. With diffusion on both modes,
+   the hybrid's two halves are finally comparable in strength.
+2. **A structure-sensitive referee.** Blurred ΔE measures tone; glyph
    matching's pitch is structure. An SSIM-like arm in the harness would
    test whether the matcher preserves edges better than the numbers
    above can show.
+3. **Diffusion refinements.** Adaptive diffusion (suppress it where
+   residuals are sub-quantum, per the ansi256-gradient regression),
+   serpentine scanning for both converters, and edge-damped diffusion
+   for the matcher like the quadrant dither has.
 4. **More fonts via ROM dumps.** `LoadROMFont` accepts the classic
    2048-byte CP437 format directly — bit-perfect, no rasterization, and
    covers the PETSCII/ATASCII/DOS font family this research targets.
