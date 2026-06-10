@@ -116,15 +116,26 @@ func (r *Renderer) BrownDitherForBlocks(
 				BG:   bgColor,
 			}
 
-			// Calculate and distribute the error
+			// Calculate and distribute the error. Each pixel's residual is
+			// measured against the color it actually renders as (fg or bg
+			// per the rune's quadrant pattern). The map lookup is amortized
+			// over the 4 pixels of the block.
+			//
+			// Historical note: this previously tested bits of the rune
+			// codepoint, assuming codepoints encode the quadrant pattern.
+			// They do not (the bit test disagreed with the quadrant table
+			// for 25 of 64 pixels), so diffusion propagated residuals
+			// measured against the wrong colors. The Blocks array INDEX
+			// does encode the pattern; see TestBlocksIndexEncodesQuadrants.
+			quad := getQuadrantsForRune(bestRune)
+			targets := [4]bool{
+				quad.TopLeft, quad.TopRight,
+				quad.BottomLeft, quad.BottomRight,
+			}
 			for i, blockColor := range block {
 				y, x := by*2+i/2, bx*2+i%2
 				var targetColor RGB
-				// PERFORMANCE: This uses a bitwise operation on the rune value
-				// instead of looking up quadrants. The Unicode block characters
-				// are specifically chosen so their codepoints encode which
-				// quadrants are filled. This is a critical hot path optimization.
-				if (bestRune & (1 << (3 - i))) != 0 {
+				if targets[i] {
 					targetColor = fgColor
 				} else {
 					targetColor = bgColor
@@ -298,18 +309,20 @@ func (r *Renderer) calculateBlockError(
 	return totalError
 }
 
-// getQuadrantsForRune returns the quadrants for a given rune character.
-// The function takes a rune character and returns the quadrants for the
-// corresponding block character, or an empty Quadrants struct if the
-// character is not found.
-func getQuadrantsForRune(char rune) Quadrants {
+// runeQuadrants maps each block character to its quadrant pattern.
+// Built once from Blocks; used by error diffusion and the block cache.
+var runeQuadrants = func() map[rune]Quadrants {
+	m := make(map[rune]Quadrants, len(Blocks))
 	for _, b := range Blocks {
-		if b.Rune == char {
-			return b.Quad
-		}
+		m[b.Rune] = b.Quad
 	}
-	// Return empty quadrants if character not found
-	return Quadrants{}
+	return m
+}()
+
+// getQuadrantsForRune returns the quadrants for a given rune character,
+// or an empty Quadrants struct if the character is not a block character.
+func getQuadrantsForRune(char rune) Quadrants {
+	return runeQuadrants[char]
 }
 
 // distributeError distributes the error from a pixel to its neighbors

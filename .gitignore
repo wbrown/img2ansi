@@ -1,0 +1,11 @@
+# Local test photo corpus for diffusion_quality_test.go (not committed)
+images/
+
+# Debug output written by the conversion pipeline
+resized.png
+dithered.png
+edges.png
+
+# Build artifacts
+cmd/ansify/ansify
+cmd/compute_tables/compute_tables
