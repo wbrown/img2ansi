@@ -240,6 +240,32 @@ source. The hybrid converter (roadmap #1) removes smooth regions from
 glyph duty entirely. Side-by-side:
 [comparisons/mandrill-ansi256_alphabets.png](comparisons/mandrill-ansi256_alphabets.png).
 
+### The CRT display model
+
+The gutter artifact stands out because our renderer is the first
+display these fonts were never designed for: axis-aligned rectangle
+pixels at infinite contrast. A CRT's beam spot low-passes — spacing
+columns read as "slightly dimmer," not hard black slots — and the 8×8
+designers drew against that. `crtDisplay` (the harness) models it: a
+normalized Gaussian beam-spot PSF convolved in **linear light** (glow
+adds in luminance, not sRGB code values), applied asymmetrically to the
+rendered side only.
+
+Measured (`TestAlphabetLadderUnderCRT`), the result is a finding about
+the *metric*, not the font: under the display model every alphabet
+shifts up uniformly (+3% at ansi16, +8% at ansi256 — a global
+linear-light brightening relative to the reference, alphabet-
+independent). Blurred ΔE never charged the gutter penalty in the first
+place — that is *why* alphabet choice measured tone-neutral — so it
+cannot reward the cure either. The artifact and its cure are structure
+percepts, invisible to a tone metric that blurs at σ = 1 cell.
+Visually the model confirms the hypothesis completely: bloom fills the
+gutters and the cell grid recedes (see
+[comparisons/mandrill-ansi256_crt.png](comparisons/mandrill-ansi256_crt.png)).
+This is the strongest concrete case for the structure-sensitive
+referee on the roadmap, and `crtDisplay` doubles as a period-faithful
+preview stage meanwhile.
+
 A dither-vs-matcher comparison conflates two variables: the cell
 REPRESENTATION (2×2 quadrants vs 8×8 glyphs) and ERROR DIFFUSION (the
 dither has it, the matcher does not yet). The harness therefore carries

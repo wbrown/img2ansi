@@ -483,6 +483,82 @@ func composeComparison(font *FontBitmaps, labels []string, panels []*imageutil.R
 	return out
 }
 
+// crtDisplay approximates a CRT's phosphor response: the rendered image
+// is convolved with a small Gaussian beam-spot PSF in linear light
+// (glow is additive in luminance, not in sRGB code values; the kernel
+// is normalized, so total light is preserved). sigma is in rendered
+// pixels — one font pixel at scorePxPerCell. This is an asymmetric
+// display model: it applies to the RENDERED side only, unlike the
+// symmetric viewing-distance blur inside blurredLabError. The 8x8
+// fonts were designed against exactly this low-pass — letterform
+// spacing columns read as "slightly dimmer" under a beam spot, not as
+// the hard black gutters our rectangle-pixel renderer draws.
+func crtDisplay(img *imageutil.RGBAImage, sigma float64) *imageutil.RGBAImage {
+	width, height := img.Width(), img.Height()
+	radius := int(math.Ceil(3 * sigma))
+	kernel := make([]float64, 2*radius+1)
+	var sum float64
+	for i := range kernel {
+		d := float64(i - radius)
+		kernel[i] = math.Exp(-d * d / (2 * sigma * sigma))
+		sum += kernel[i]
+	}
+	for i := range kernel {
+		kernel[i] /= sum
+	}
+
+	clamp := func(v, hi int) int {
+		if v < 0 {
+			return 0
+		}
+		if v >= hi {
+			return hi - 1
+		}
+		return v
+	}
+	toLinear := func(v uint8) float64 {
+		return math.Pow(float64(v)/255, 2.2)
+	}
+	toSRGB := func(v float64) uint8 {
+		return uint8(math.Max(0, math.Min(255,
+			math.Round(255*math.Pow(v, 1/2.2)))))
+	}
+
+	// Horizontal pass over linearized values
+	horiz := make([][][3]float64, height)
+	for y := 0; y < height; y++ {
+		horiz[y] = make([][3]float64, width)
+		for x := 0; x < width; x++ {
+			var acc [3]float64
+			for k, w := range kernel {
+				p := img.GetRGB(clamp(x+k-radius, width), y)
+				acc[0] += toLinear(p.R) * w
+				acc[1] += toLinear(p.G) * w
+				acc[2] += toLinear(p.B) * w
+			}
+			horiz[y][x] = acc
+		}
+	}
+
+	// Vertical pass, then back to sRGB
+	out := imageutil.NewRGBAImage(width, height)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			var acc [3]float64
+			for k, w := range kernel {
+				p := horiz[clamp(y+k-radius, height)][x]
+				acc[0] += p[0] * w
+				acc[1] += p[1] * w
+				acc[2] += p[2] * w
+			}
+			out.SetRGB(x, y, imageutil.RGB{
+				R: toSRGB(acc[0]), G: toSRGB(acc[1]), B: toSRGB(acc[2]),
+			})
+		}
+	}
+	return out
+}
+
 // nearestFg maps a color to the nearest foreground palette color using
 // the renderer's tables.
 func nearestFg(r *Renderer, c RGB) RGB {
@@ -625,6 +701,58 @@ func TestConverterArms(t *testing.T) {
 					photoSource(img), cellsW, cellsH, arms)
 			}
 		})
+	}
+}
+
+// TestAlphabetLadderUnderCRT scores the matcher's alphabet ladder both
+// as raw rectangle pixels and through the CRT display model. The 8x8
+// fonts assume a beam-spot low-pass, so letterform spacing columns are
+// penalized by hard-pixel scoring in a way no period display ever
+// showed; the display model measures how much of that penalty is a
+// rendering anachronism.
+func TestAlphabetLadderUnderCRT(t *testing.T) {
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := imageutil.LoadImage("images/mandrill.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cellsW := 100
+	aspect := float64(img.Width()) / float64(img.Height())
+	cellsH := int(float64(cellsW) / aspect / 2.0)
+	src := photoSource(img)
+	reference, _ := src(cellsW*scorePxPerCell, cellsH*scorePxPerCell)
+
+	const beamSigma = 0.5 // beam spot, in font pixels
+
+	alphabets := []struct {
+		name  string
+		runes []rune
+	}{
+		{"full", nil},
+		{"blocks+box", append(append([]rune{}, AlphabetBlocks...), AlphabetBoxDrawing...)},
+		{"ascii", AlphabetASCII},
+	}
+
+	for _, pal := range []string{"ansi16", "ansi256"} {
+		r := NewRenderer(WithPalette(pal))
+		for _, a := range alphabets {
+			m := NewGlyphMatcher(r, font)
+			m.Diffusion = true
+			if err := m.RestrictAlphabet(a.runes); err != nil {
+				t.Fatal(err)
+			}
+			input, edges := src(cellsW*scorePxPerCell, cellsH*scorePxPerCell)
+			rendered := imageutil.RGBAImageFromImage(
+				font.RenderBlocks(m.Convert(input, edges), 1))
+
+			raw := blurredLabError(rendered, reference, 1.0*scorePxPerCell)
+			crt := blurredLabError(crtDisplay(rendered, beamSigma), reference, 1.0*scorePxPerCell)
+			t.Logf("%-8s %-11s ΔE raw=%6.2f  crt(σ=%.1f)=%6.2f  (%+.0f%%)",
+				pal, a.name, raw, beamSigma, crt, (crt/raw-1)*100)
+		}
 	}
 }
 
