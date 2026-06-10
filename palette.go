@@ -13,6 +13,8 @@ import (
 
 //go:embed colordata/ansi16.json
 //go:embed colordata/ansi16.palette
+//go:embed colordata/ansi16bbs.json
+//go:embed colordata/ansi16bbs.palette
 //go:embed colordata/ansi256.json
 //go:embed colordata/ansi256.palette
 //go:embed colordata/jetbrains32.json
@@ -278,7 +280,7 @@ func PaletteSame(fgData AnsiData, bgData AnsiData) bool {
 	fgBgSame := true
 
 	// Check if the sizes are the same
-	if len(fgData) != len(fgData) {
+	if len(fgData) != len(bgData) {
 		fgBgSame = false
 	} else {
 		fgExist := make(map[uint32]bool)

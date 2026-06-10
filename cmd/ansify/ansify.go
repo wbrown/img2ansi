@@ -102,9 +102,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Force ansi16 palette in BBS mode
+	if *iceColors && !*bbsMode {
+		fmt.Fprintln(os.Stderr, "Warning: -ice has no effect without -bbs")
+	}
+
+	// BBS mode determines the palette. Without iCE colors only 8
+	// backgrounds are expressible, so the block search must be restricted
+	// to the ansi16bbs palette (16 fg / 8 bg colors); with -ice all 16
+	// backgrounds of ansi16 are available via the blink attribute.
 	if *bbsMode {
-		*paletteFile = "ansi16"
+		bbsPalette := "ansi16bbs"
+		if *iceColors {
+			bbsPalette = "ansi16"
+		}
+		if *paletteFile != "ansi16" && *paletteFile != bbsPalette {
+			fmt.Fprintf(os.Stderr,
+				"Warning: -bbs overrides -palette %s with %s\n",
+				*paletteFile, bbsPalette)
+		}
+		*paletteFile = bbsPalette
 	}
 
 	// Build renderer options

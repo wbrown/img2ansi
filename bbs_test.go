@@ -225,23 +225,64 @@ func TestDefaultBlockSetUnchanged(t *testing.T) {
 	}
 }
 
-func TestBgCodeFromFg(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"30", "40"},
-		{"31", "41"},
-		{"37", "47"},
-		{"90", "100"},
-		{"91", "101"},
-		{"97", "107"},
-	}
+// Regression test: a full block with a bright foreground must keep its
+// bold foreground and CP437 0xDB byte, not be rewritten to a space with
+// a background color that silently loses brightness without iCE.
+func TestCompressBBSBrightForegroundFullBlock(t *testing.T) {
+	r := NewRenderer(
+		WithBBSMode(false),
+		WithPalette("ansi16bbs"),
+	)
 
-	for _, tt := range tests {
-		result := bgCodeFromFg(tt.input)
-		if result != tt.expected {
-			t.Errorf("bgCodeFromFg(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
+	brightRed := RGB{0xFF, 0x55, 0x55} // code 91
+	black := RGB{0x00, 0x00, 0x00}     // code 40
+
+	blocks := [][]BlockRune{{{Rune: '█', FG: brightRed, BG: black}}}
+	out := r.CompressBBS(blocks)
+
+	if !bytes.Contains(out, []byte{0xDB}) {
+		t.Errorf("full block should be emitted as CP437 0xDB, got %q", out)
+	}
+	if !bytes.Contains(out, []byte("1;31")) {
+		t.Errorf("bright red foreground should be emitted as bold (1;31), got %q", out)
+	}
+}
+
+// Regression test: without iCE colors only 8 background colors are
+// expressible, so the ansi16bbs palette must keep the block search from
+// choosing bright backgrounds that the output encoding would silently
+// downgrade. A solid bright-red block must come back as a bright
+// foreground on a full block, not a bright background under a space.
+func TestBBSSearchUsesBoldForBrightSolid(t *testing.T) {
+	r := NewRenderer(
+		WithBBSMode(false),
+		WithPalette("ansi16bbs"),
+	)
+
+	brightRed := RGB{0xFF, 0x55, 0x55}
+	block := [4]RGB{brightRed, brightRed, brightRed, brightRed}
+	rn, fg, _ := r.FindBestBlockRepresentation(block, false)
+
+	if rn != '█' || fg != brightRed {
+		t.Errorf("solid bright red should map to '█' with bright red FG, got %q fg=%v",
+			rn, fg)
+	}
+}
+
+// The ansi16bbs palette must expose all 16 foreground colors but only
+// the 8 standard background colors.
+func TestANSI16BBSPaletteShape(t *testing.T) {
+	r := NewRenderer(WithPalette("ansi16bbs"))
+
+	fgCount := 0
+	r.fgAnsi.Iterate(func(_, _ interface{}) { fgCount++ })
+	bgCount := 0
+	r.bgAnsi.Iterate(func(_, _ interface{}) { bgCount++ })
+
+	if fgCount != 16 {
+		t.Errorf("ansi16bbs should have 16 foreground colors, got %d", fgCount)
+	}
+	if bgCount != 8 {
+		t.Errorf("ansi16bbs should have 8 background colors, got %d", bgCount)
 	}
 }

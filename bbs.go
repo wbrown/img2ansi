@@ -152,19 +152,6 @@ func (r *Renderer) CompressBBS(blocks [][]BlockRune) []byte {
 				cp437Byte = 0x20
 			}
 
-			// Optimize: full block only needs bg color (render as space with bg)
-			// and space only needs... well, space with bg color
-			if block.Rune == '█' {
-				// Full block: render as space with fg as bg
-				fgAsBg := bbsBgCode(bgCodeFromFg(fgCode.(string)), r.ICEColors)
-				if currentFg != "0;30" || currentBg != fgAsBg {
-					flush()
-					writeColor("0;30", fgAsBg)
-				}
-				pendingChars = append(pendingChars, 0x20)
-				continue
-			}
-
 			if fg != currentFg || bg != currentBg {
 				flush()
 				writeColor(fg, bg)
@@ -178,45 +165,4 @@ func (r *Renderer) CompressBBS(blocks [][]BlockRune) []byte {
 	}
 
 	return buf
-}
-
-// bgCodeFromFg converts a foreground ANSI code to the equivalent background code.
-// e.g., "31" -> "41", "91" -> "101"
-func bgCodeFromFg(fgCode string) string {
-	switch fgCode {
-	case "30":
-		return "40"
-	case "31":
-		return "41"
-	case "32":
-		return "42"
-	case "33":
-		return "43"
-	case "34":
-		return "44"
-	case "35":
-		return "45"
-	case "36":
-		return "46"
-	case "37":
-		return "47"
-	case "90":
-		return "100"
-	case "91":
-		return "101"
-	case "92":
-		return "102"
-	case "93":
-		return "103"
-	case "94":
-		return "104"
-	case "95":
-		return "105"
-	case "96":
-		return "106"
-	case "97":
-		return "107"
-	default:
-		return "40"
-	}
 }
