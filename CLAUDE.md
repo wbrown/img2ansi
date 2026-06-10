@@ -812,8 +812,9 @@ output back to pixels and scores it against the pre-dither reference:
 - **Color transitions**: more transitions on a smooth ramp = smoother
   dithering (port of the original harness metric).
 - Arms: `no-diffusion` (per-block quantization) vs `diffusion`.
-- `TestDiffusionQualityPhotos` runs against any PNGs in `images/`
-  (not committed); set `DIFFUSION_PNGS=<dir>` to dump comparison renders.
+- `TestDiffusionQualityPhotos` runs against any PNGs in `images/` (the
+  committed reference corpus — see `images/README.md`); set
+  `DIFFUSION_PNGS=<dir>` to dump comparison renders.
 
 The cross-converter harness (`measureConverterArms`,
 `TestConverterArms`) generalizes this to any `BlockConverter`: each
