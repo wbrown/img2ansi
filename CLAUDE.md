@@ -2,6 +2,272 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The constitution below is adapted from `wbrown/janus-datalog` and carries the
+same force here. Most of its examples are not hypothetical: they are documented
+failures from sessions in this repository.
+
+## The Gate
+
+The repository's standard gate, in full:
+
+```bash
+go test ./...      # main module: img2ansi + imageutil
+gofmt -l .         # must print NOTHING
+go vet .
+```
+
+- `cmd/ansify`, `cmd/compute_tables`, and `cmd/compute_glyphs` are **separate
+  modules**: root `go test ./...` does not touch them. When you change them,
+  build them (`cd cmd/<tool> && go build .`).
+- The main-package suite is slow (90–300s: palette table computation, the
+  quality harness). Use generous **tool-call timeouts** (600000ms) and wait.
+  **Do NOT add `-timeout` to `go test` commands, or use `-timeout 0`.** Use the
+  default. Timeouts mean WAIT or TEST SMALLER SUBSETS, never COMMIT ANYWAY.
+- A non-empty `gofmt -l` is a failed gate, exactly like a red test.
+
+## Architectural Authority
+
+**The user owns all architectural decisions. Claude implements them.**
+
+Before making ANY of these decisions, ASK:
+- Introducing new patterns (globals, parallel code paths, abstractions)
+- Changing existing patterns (options → globals, new ways to reach the palette)
+- Adding new cross-cutting concerns (configuration, logging, caching)
+- Deviating from established conventions for any reason
+
+**If you're unsure whether something is an "architectural decision":**
+- Would it affect multiple files/packages?
+- Would it change how components interact?
+- Would it require other code to change to accommodate it?
+- Are you thinking "I'll ask forgiveness later"?
+
+**Then ASK first.**
+
+**Red flags that indicate you're overstepping:**
+- "This is just temporary/experimental"
+- "I'll refactor this later"
+- "It's faster to do it this way"
+- "It's simpler/easier this way" (when deviating from a plan or established pattern)
+- Making a choice between multiple valid approaches without consulting
+
+**Bugs do not authorize design changes:**
+- Discovering a bug does not authorize you to change the agreed design. Report
+  it and ask.
+- If something we agreed on doesn't work, STOP and ask. Do not substitute
+  alternatives.
+- If you're about to do something different from what was discussed, ASK FIRST.
+
+**Case study (this repository)**: on discovering that the KD-tree nearest-color
+search was broken, a session built a *parallel* exact-scan path for new code and
+left the broken tree (and every table built from it) in production, filed as a
+"known issue." That forked "nearest color" into two truths. The correct action
+was the one eventually demanded: fix the tree, regenerate the tables, delete the
+fork.
+
+**The user's job**: Set direction, make architectural choices, review designs.
+**Your job**: Implement, follow patterns, propose options (not make choices).
+
+## When Tests Fail
+
+**Failing tests are information, not obstacles.**
+
+When tests fail after you make a change:
+1. Understand WHY the test is failing
+2. Report the failure to the user with context
+3. Ask how they want to proceed
+
+**NEVER change architecture or add code just to make tests pass.** A failing
+test may mean the change has unintended consequences, the approach is wrong,
+the expectations need updating, or the feature isn't ready. All of these are
+decisions for the user.
+
+A test that encodes a *measured result* is different from a test that encodes
+an *invariant*. When a measurement shifts because an upstream defect was fixed,
+the assertion may legitimately change — but say so explicitly, show both
+numbers, and get agreement. Do not quietly loosen an assertion to get green.
+
+## The Baseline Is Green — Never Blame Pre-Existing Conditions
+
+**Every gate passes before any work session starts. This is an invariant.**
+Any gate that fails during or after your work was caused by your work — either
+a change you made, or a stricter check you chose to run. There is no third
+possibility. Therefore:
+
+- **NEVER attribute a failure to "pre-existing conditions."** The phrasing
+  "pre-existing / not my code / I didn't touch that" is **forbidden** — it is
+  blame-deflection. In this repository a session dismissed `gofmt -l` output as
+  "pre-existing alignment drift, not my code — leaving it." Wrong twice: some
+  of the drift had passed through that session's own commits, and in a gofmt'd
+  language *nobody owns whitespace* — the tree has one format. The fix took one
+  command. Run it.
+- **NEVER run experiments to "prove" a failure is pre-existing.** No
+  `git stash`, no revert-and-rerun A/B. Causation is determined by reading the
+  diff and the failure. (`git stash` is banned outright — see below.)
+- If you choose to run a stricter check than the standard gate, anything it
+  finds is yours to fully resolve — or don't run it.
+
+When a gate is red there is exactly one fork: **fix it, or report it and ask.**
+There is no "investigate whose fault it is" step.
+
+## When Asked to Revert
+
+**Revert IMMEDIATELY. Do not defer.** Do not explain first, do not read files
+to "understand context," do not make any other changes first. Deferred reverts
+bury the recoverable state in context; if compaction happens, the original
+code may be unrecoverable.
+
+## Principles Are Upstream, Not a Final Filter
+
+Every rule in this file is a **discipline that generates your actions**, not a
+token to suppress at the last checkpoint. If you find yourself routing a rule
+through a filter instead of letting it shape the action, you have already lost
+it. The recurring instances:
+
+- **"No helpers" is not "don't type `helper` in a name."** Name every piece of
+  code for what it does. If the word *helper* occurs to you at all — in a name,
+  a comment, prose, a commit message — you have not done the naming, and that
+  code needs a second look. The word surfacing IS the violation, wherever it
+  surfaces. Acceptable names describe action or role: `nearestFgColor`,
+  `calibrationProbes`, `measureConverterArms`, a fixture builder, a constructor.
+  (`t.Helper()` is Go's API name, not yours; calling it is fine.)
+
+- **Never destroy state you cannot get back.** `git clean` and `git stash` are
+  **banned outright, for any reason**. Do not `rm` files you did not create
+  this turn; to remove something, move it aside or ask. When in doubt, move,
+  don't delete.
+
+- **Green gates commit-prep.** `git add`, updating docs to say "fixed",
+  refreshing numbers — these come *after* a green gate, never in the same
+  breath as the run that would tell you whether the work is correct.
+
+- **Diagnose by reading, not by ritual — and never patch around tooling.** A
+  failed Edit means your `old_string` was stale: Read the file again and Edit
+  again. In this repository a session responded to Edit failures by patching
+  source files with `python3` heredocs — which bypassed change tracking,
+  corrupted a file when a string assertion half-matched, and made the edits
+  unreviewable. Read-then-Edit, every time. Scripted rewrites of source files
+  are not an escape hatch from tool friction.
+
+- **One result at a time when actions depend on each other.** Fan out tool
+  calls only for truly independent work.
+
+## Fix the Root Cause — Extend, Don't Avoid
+
+When a component can't handle a valid input, **extend or fix the component**.
+Never:
+- Return an error to refuse the work ("not supported")
+- Route around it ("I'll add a separate path that avoids the broken one")
+- Pass through unchanged
+- Blame the caller
+
+These are avoidance disguised as engineering judgment. Workarounds metastasize:
+the KD-tree workaround (above) created two sources of truth for "nearest
+color"; the gofmt dodge left the tree dirty for the next session to dodge
+again. The moment you can name the root cause, the root cause is the work.
+
+The one legitimate layering exception must be **explicit and principled**, not
+an evasion: e.g. this codebase *synthesizes* missing quadrant glyphs for
+preview rendering (the preview renderer is our medium and can draw anything)
+while **forbidding** synthesized glyphs from expanding a search alphabet (the
+target's medium is what it is — `GenuineGlyph`, never `GetGlyph`, for
+derivation). Search space must equal what the medium can display. When you
+make a layering argument, write the rule down and pin it with a test.
+
+## Measure, Don't Theorize
+
+This repository has a referee: the quality harness in
+`diffusion_quality_test.go` (blurred-LAB ΔE, cross-converter arms, comparison
+renders). Performance and quality claims come from it, not from reasoning.
+
+**Rules**:
+- Never claim a quality or performance effect without harness numbers (or a
+  profile, for CPU). Never fabricate per-operation costs — measure.
+- **A comparison must isolate one variable.** A dither-vs-matcher comparison
+  conflated representation with error diffusion and reported a wrong
+  conclusion until a diffusion-ablated control arm was added — at the user's
+  insistence. When arms differ in more than the thing you're measuring, add
+  the control arm before drawing any conclusion.
+- **A validation that cannot fail in the way you might be wrong validates
+  nothing.** Documented instances here: a rasterizer "calibration" scored
+  perfect on `█`/`▀` while mis-rendering 225 of 233 glyphs (block edges sit on
+  cell boundaries — the probe couldn't see half-pixel phase error); a
+  bit-identical regeneration check "validated" glyph data that was identically
+  wrong in both pipelines (89 runes of missing-glyph boxes); 16 passing tests
+  exercised a black-to-#555555 table defect zero times. Before trusting a
+  check, ask: *if I were wrong in the most likely way, would this fail?*
+- When measurements contradict a theory, the theory is wrong — measure again.
+
+## Attribution
+
+- Commits and PRs are authored as the repository owner
+  (`Wes Brown <wesbrown18@gmail.com>`), never as Claude.
+- No "Generated with Claude" trailers, no model identifiers, no AI attribution
+  in commit messages, PR bodies, code comments, or any committed artifact.
+
+## Go Implementation Guidelines
+
+Write idiomatic Go, not Java-in-Go.
+
+### CRITICAL: No Global Configuration State
+**NEVER use package-level variables for configuration.** This codebase already
+paid to remove its global API (v1.0.0): configuration lives on the `Renderer`
+via functional options (`WithPalette`, `WithBBSMode`, ...). New configuration
+goes there. Fields the search reads (like `blocks`) are always-initialized
+attributes, not nil-checked overrides behind accessors.
+
+### CRITICAL: Stop Creating V2 Versions
+**NEVER create V2 versions of functions/interfaces.** Fix the original. If you
+need different behavior, add a parameter or option. Parallel implementations
+are how this repo got three glyph bit orderings and two nearest-color paths.
+
+### CRITICAL: No "Helpers"
+**NEVER name files, functions, or packages `helper`, `helpers`, `utils`,
+`common`, `misc`, or `shared`.** Never use "helper" in comments or prose to
+describe code. Every function does something specific — name it for what it
+does. A junk-drawer name signals "secondary, not important," which is exactly
+where parallel implementations and untested code hide. If you can't name it,
+you don't understand it well enough to write it.
+
+**DO**: simple functions; methods on the type whose data they use; interfaces
+only for actual polymorphism (`BlockConverter`, `ColorDistanceMethod`); small
+focused files named for their contents; explicit errors.
+**DON'T**: Manager/Service/Controller/Factory types; abstraction layers
+without a second implementation; getter/setters; dependency injection
+ceremony.
+
+## Testing Strategy
+
+**Tests are not optional.** Implementation without tests is incomplete
+implementation. "It compiles" proves syntax; tests prove behavior.
+
+**Workflow (mandatory)**: implement → write tests (happy path, edge cases,
+error cases) → run them → verify PASS in the output → only then commit.
+
+**NEVER**:
+- ❌ Declare work done before tests pass — actually read the PASS lines
+- ❌ Assume a failure is a "test problem" — it reveals a real bug until proven otherwise
+- ❌ Use `t.Skip` to hide known bugs or unimplemented behavior
+- ❌ Leave scratch `*_test.go` probes in the tree — a probe that taught you
+  something becomes a real named regression test, or it gets removed before
+  commit
+- ❌ Commit because tests are slow — the suite's slowest tests (palette
+  computation, the harness) are the ones guarding correctness
+- ❌ Write assertions calibrated to broken data — when a measured baseline
+  moves because you fixed its input, re-derive the assertion from the
+  invariant, not from the old number
+
+**ALWAYS**:
+- ✅ Pin every bug you fix with a regression test that fails on the old code
+  (`TestBlocksIndexEncodesQuadrants`, `TestNearestNeighborBlackRegression`,
+  `TestBlockGlyphsCoverDitherOutput` exist for exactly this reason)
+- ✅ Validate algorithms against a ground-truth oracle where one exists
+  (`TestNearestNeighborMatchesLinearScan` is the pattern: exhaustive scan as
+  the referee for the clever structure)
+- ✅ Ask whether your tests exercise the code path you changed — passing
+  tests that all route around the defect are worse than no tests, because
+  they manufacture confidence
+- ✅ Wait for slow tests; raise the tool-call timeout, not your risk tolerance
+
 ## Project Overview
 
 img2ansi is a Go-based tool that converts images into ANSI art using a novel "Brown Dithering Algorithm". The project uses 2x2 pixel blocks and sophisticated Unicode character selection to create high-quality terminal art with support for multiple color palettes.
@@ -473,6 +739,15 @@ Key findings so far:
    anatomy.
 
 ## Critical Implementation Notes
+
+**Convention — entries here and in "Hard-Won Lessons" are historical
+learnings, not a live bug list.** Every entry describes a defect that has been
+*fixed* unless it carries an explicit `**Status**: Open` marker. Entries are
+often written as the problem statement at the time of discovery — do not infer
+current state from prose or tense. Before treating anything here as a live
+bug, re-read the cited code; if you fix or confirm an entry, update its status
+so the next reader doesn't re-derive it. A stale "this is broken" note
+manufactures phantom bugs as easily as a missing note hides real ones.
 
 ### Floyd-Steinberg Error Diffusion Bug (Fixed)
 
