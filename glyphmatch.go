@@ -39,7 +39,13 @@ type GlyphMatcher struct {
 	font     *FontBitmaps
 	runes    []rune
 	masks    []uint64
-	flatRune rune
+	flatIdx  int
+
+	// Display-aware matching state (see SetBeamSigma): per-glyph CRT'd
+	// coverage footprints, quantized to footprintLevels per pixel.
+	// nil when beamSigma == 0 (exact 1-bit matching).
+	beamSigma  float64
+	footprints [][cellPixels]uint8
 
 	// MaxAnchors bounds the per-cell candidate colors (top-K palette
 	// colors by pixel frequency), and with it the pair search width.
@@ -58,6 +64,115 @@ type GlyphMatcher struct {
 }
 
 var _ BlockConverter = (*GlyphMatcher)(nil)
+
+// cellPixels is the number of source pixels in one matcher cell.
+const cellPixels = GlyphWidth * GlyphHeight
+
+// footprintLevels quantizes a CRT'd glyph's per-pixel coverage for
+// display-aware matching: level k means coverage k/(footprintLevels-1).
+const footprintLevels = 9
+
+// glyphFootprint convolves a 1-bit glyph mask with a Gaussian beam-spot
+// PSF (cell-local, clamped at cell edges — cross-cell bleed is not
+// modeled) and quantizes per-pixel coverage to footprintLevels.
+func glyphFootprint(mask uint64, sigma float64) [cellPixels]uint8 {
+	radius := int(math.Ceil(3 * sigma))
+	kernel := make([]float64, 2*radius+1)
+	var sum float64
+	for i := range kernel {
+		d := float64(i - radius)
+		kernel[i] = math.Exp(-d * d / (2 * sigma * sigma))
+		sum += kernel[i]
+	}
+	for i := range kernel {
+		kernel[i] /= sum
+	}
+	clamp := func(v int) int {
+		if v < 0 {
+			return 0
+		}
+		if v > GlyphWidth-1 {
+			return GlyphWidth - 1
+		}
+		return v
+	}
+
+	var ink, horiz, blurred [cellPixels]float64
+	for i := 0; i < cellPixels; i++ {
+		if mask&(1<<i) != 0 {
+			ink[i] = 1
+		}
+	}
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			var acc float64
+			for k, w := range kernel {
+				acc += ink[y*GlyphWidth+clamp(x+k-radius)] * w
+			}
+			horiz[y*GlyphWidth+x] = acc
+		}
+	}
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			var acc float64
+			for k, w := range kernel {
+				acc += horiz[clamp(y+k-radius)*GlyphWidth+x] * w
+			}
+			blurred[y*GlyphWidth+x] = acc
+		}
+	}
+
+	var fp [cellPixels]uint8
+	for i, v := range blurred {
+		fp[i] = uint8(math.Round(v * (footprintLevels - 1)))
+	}
+	return fp
+}
+
+// blendLinear mixes fg over bg with the given coverage in linear light,
+// matching how phosphor glow combines (the same 2.2 exponent as
+// crtDisplay in the quality harness).
+func blendLinear(fg, bg RGB, alpha float64) RGB {
+	lin := func(v uint8) float64 { return math.Pow(float64(v)/255, 2.2) }
+	enc := func(v float64) uint8 {
+		return uint8(math.Max(0, math.Min(255,
+			math.Round(255*math.Pow(v, 1/2.2)))))
+	}
+	return RGB{
+		R: enc(lin(fg.R)*alpha + lin(bg.R)*(1-alpha)),
+		G: enc(lin(fg.G)*alpha + lin(bg.G)*(1-alpha)),
+		B: enc(lin(fg.B)*alpha + lin(bg.B)*(1-alpha)),
+	}
+}
+
+// SetBeamSigma enables display-aware matching: candidate glyphs are
+// scored as their CRT'd appearance rather than their 1-bit masks. Each
+// glyph's mask is convolved with a beam-spot PSF of the given sigma (in
+// font pixels) and quantized to coverage levels; pixel error is then
+// measured against the linear-light fg/bg blend at each pixel's
+// coverage. Matching what the display shows instead of what the bytes
+// say changes which glyphs win — letterform spacing columns stop
+// costing as hard gutters, exactly as on period hardware. Zero
+// restores exact 1-bit matching.
+func (m *GlyphMatcher) SetBeamSigma(sigma float64) error {
+	if sigma < 0 {
+		return fmt.Errorf("beam sigma must be non-negative, got %v", sigma)
+	}
+	m.beamSigma = sigma
+	m.rebuildFootprints()
+	return nil
+}
+
+func (m *GlyphMatcher) rebuildFootprints() {
+	if m.beamSigma == 0 {
+		m.footprints = nil
+		return
+	}
+	m.footprints = make([][cellPixels]uint8, len(m.masks))
+	for gi, mask := range m.masks {
+		m.footprints[gi] = glyphFootprint(mask, m.beamSigma)
+	}
+}
 
 // Alphabet presets for RestrictAlphabet. Each is a rune range that the
 // matcher intersects with the font's genuine glyphs; combine them with
@@ -138,13 +253,14 @@ func (m *GlyphMatcher) RestrictAlphabet(alphabet []rune) error {
 
 	// Rune for flat cells (fg == bg renders identically under any
 	// glyph; prefer the full block when the alphabet has one).
-	m.flatRune = m.runes[0]
+	m.flatIdx = 0
 	for gi, mask := range m.masks {
 		if mask == ^uint64(0) {
-			m.flatRune = m.runes[gi]
+			m.flatIdx = gi
 			break
 		}
 	}
+	m.rebuildFootprints()
 	return nil
 }
 
@@ -164,10 +280,14 @@ func (m *GlyphMatcher) Convert(img *imageutil.RGBAImage, edges *imageutil.GrayIm
 	for cy := range out {
 		out[cy] = make([]BlockRune, cellsW)
 		for cx := range out[cy] {
-			cell, mask := m.matchCell(img, cx*k, cy*k)
+			cell, gi := m.matchCell(img, cx*k, cy*k)
 			out[cy][cx] = cell
 			if m.Diffusion {
-				m.diffuseCellResidual(img, cx*k, cy*k, cell, mask)
+				if m.footprints != nil {
+					m.diffuseCellResidualBlend(img, cx*k, cy*k, cell, &m.footprints[gi])
+				} else {
+					m.diffuseCellResidual(img, cx*k, cy*k, cell, GlyphBitmap(m.masks[gi]))
+				}
 			}
 		}
 	}
@@ -199,12 +319,35 @@ func (m *GlyphMatcher) diffuseCellResidual(
 	}
 }
 
+// diffuseCellResidualBlend is the display-aware variant of
+// diffuseCellResidual: residuals are measured against the blended
+// (CRT'd) color each pixel actually displays as under the chosen
+// glyph's footprint.
+func (m *GlyphMatcher) diffuseCellResidualBlend(
+	img *imageutil.RGBAImage,
+	x0, y0 int,
+	cell BlockRune,
+	fp *[cellPixels]uint8,
+) {
+	var ladder [footprintLevels]RGB
+	for k := range ladder {
+		ladder[k] = blendLinear(cell.FG, cell.BG,
+			float64(k)/float64(footprintLevels-1))
+	}
+	for i := 0; i < cellPixels; i++ {
+		x, y := i%GlyphWidth, i/GlyphWidth
+		p := img.GetRGB(x0+x, y0+y)
+		residual := RGB{p.R, p.G, p.B}.subtractToError(ladder[fp[i]])
+		distributeError(img, y0+y, x0+x, residual, false)
+	}
+}
+
 // matchCell finds the (glyph, fg, bg) with minimum total color error
-// for the 8x8 cell at (x0, y0), returning the chosen cell and the
-// winning glyph's mask (which diffusion needs to know each pixel's
+// for the 8x8 cell at (x0, y0), returning the chosen cell and the index
+// of the winning glyph (which diffusion uses to look up each pixel's
 // rendered color).
-func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRune, GlyphBitmap) {
-	const n = GlyphWidth * GlyphHeight
+func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRune, int) {
+	const n = cellPixels
 
 	var pixels [n]RGB
 	var rSum, gSum, bSum int
@@ -240,9 +383,13 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 	}
 	if len(anchors) == 1 {
 		// Flat cell: with fg == bg every glyph renders identically, and
-		// the mask is irrelevant for the same reason.
-		return BlockRune{Rune: m.flatRune, FG: anchors[0], BG: anchors[0]},
-			^GlyphBitmap(0)
+		// the glyph choice is irrelevant for the same reason.
+		return BlockRune{Rune: m.runes[m.flatIdx], FG: anchors[0], BG: anchors[0]},
+			m.flatIdx
+	}
+
+	if m.footprints != nil {
+		return m.matchCellDisplayAware(&pixels, anchors)
 	}
 
 	// Distance matrix: pixel x anchor, computed once per cell and
@@ -255,8 +402,7 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 	}
 
 	best := math.Inf(1)
-	var bestRune rune
-	var bestMask GlyphBitmap
+	bestIdx := m.flatIdx
 	var bestFG, bestBG RGB
 
 	var absDelta [n]float64
@@ -296,8 +442,7 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 				}
 				if xor == 0 && cost < best {
 					best = cost
-					bestRune = m.runes[gi]
-					bestMask = GlyphBitmap(mask)
+					bestIdx = gi
 					bestFG = anchors[f]
 					bestBG = anchors[b]
 				}
@@ -305,7 +450,73 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 		}
 	}
 
-	return BlockRune{Rune: bestRune, FG: bestFG, BG: bestBG}, bestMask
+	return BlockRune{Rune: m.runes[bestIdx], FG: bestFG, BG: bestBG}, bestIdx
+}
+
+// matchCellDisplayAware scores candidates as their CRT'd appearance:
+// for each (fg, bg) pair a blend ladder of footprintLevels linear-light
+// mixes is built, per-pixel distances to every ladder step are
+// tabulated, and each glyph's error is the sum of its footprint's
+// per-pixel ladder costs. The per-pixel minimum over the ladder gives
+// the pair's floor for pruning, mirroring the exact path's ideal mask.
+func (m *GlyphMatcher) matchCellDisplayAware(pixels *[cellPixels]RGB, anchors []RGB) (BlockRune, int) {
+	best := math.Inf(1)
+	bestIdx := m.flatIdx
+	var bestFG, bestBG RGB
+
+	var pen [cellPixels][footprintLevels]float64
+	for f := range anchors {
+		for b := range anchors {
+			if f == b {
+				continue
+			}
+
+			var ladder [footprintLevels]RGB
+			for k := range ladder {
+				ladder[k] = blendLinear(anchors[f], anchors[b],
+					float64(k)/float64(footprintLevels-1))
+			}
+
+			var floor float64
+			for i := 0; i < cellPixels; i++ {
+				minD := math.Inf(1)
+				for k := 0; k < footprintLevels; k++ {
+					d := m.renderer.ColorMethod.Distance(pixels[i], ladder[k])
+					pen[i][k] = d
+					if d < minD {
+						minD = d
+					}
+				}
+				for k := 0; k < footprintLevels; k++ {
+					pen[i][k] -= minD
+				}
+				floor += minD
+			}
+			if floor >= best {
+				continue
+			}
+
+			for gi := range m.footprints {
+				fp := &m.footprints[gi]
+				cost := floor
+				i := 0
+				for ; i < cellPixels; i++ {
+					cost += pen[i][fp[i]]
+					if cost >= best {
+						break
+					}
+				}
+				if i == cellPixels && cost < best {
+					best = cost
+					bestIdx = gi
+					bestFG = anchors[f]
+					bestBG = anchors[b]
+				}
+			}
+		}
+	}
+
+	return BlockRune{Rune: m.runes[bestIdx], FG: bestFG, BG: bestBG}, bestIdx
 }
 
 func (m *GlyphMatcher) maxAnchors() int {

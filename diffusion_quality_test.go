@@ -753,6 +753,38 @@ func TestAlphabetLadderUnderCRT(t *testing.T) {
 			t.Logf("%-8s %-11s ΔE raw=%6.2f  crt(σ=%.1f)=%6.2f  (%+.0f%%)",
 				pal, a.name, raw, beamSigma, crt, (crt/raw-1)*100)
 		}
+
+		// Display-aware matching: the matcher scores candidates as their
+		// CRT'd appearance (SetBeamSigma), so its objective aligns with
+		// the CRT-scored metric. Judged as displayed, matching what the
+		// display shows should not lose to matching what the bytes say.
+		byteMatched := NewGlyphMatcher(r, font)
+		byteMatched.Diffusion = true
+		displayMatched := NewGlyphMatcher(r, font)
+		displayMatched.Diffusion = true
+		if err := displayMatched.SetBeamSigma(beamSigma); err != nil {
+			t.Fatal(err)
+		}
+		crtScores := make(map[string]float64)
+		for _, m := range []struct {
+			name    string
+			matcher *GlyphMatcher
+		}{{"byte-matched", byteMatched}, {"display-matched", displayMatched}} {
+			input, edges := src(cellsW*scorePxPerCell, cellsH*scorePxPerCell)
+			rendered := imageutil.RGBAImageFromImage(
+				font.RenderBlocks(m.matcher.Convert(input, edges), 1))
+			raw := blurredLabError(rendered, reference, 1.0*scorePxPerCell)
+			crt := blurredLabError(crtDisplay(rendered, beamSigma), reference, 1.0*scorePxPerCell)
+			crtScores[m.name] = crt
+			t.Logf("%-8s %-15s ΔE raw=%6.2f  crt(σ=%.1f)=%6.2f",
+				pal, m.name, raw, beamSigma, crt)
+		}
+		// Objective alignment: judged as displayed, matching what the
+		// display shows must not lose to matching what the bytes say.
+		if crtScores["display-matched"] >= crtScores["byte-matched"] {
+			t.Errorf("%s: display-matched (ΔE %.2f) should beat byte-matched (ΔE %.2f) under the display model",
+				pal, crtScores["display-matched"], crtScores["byte-matched"])
+		}
 	}
 }
 

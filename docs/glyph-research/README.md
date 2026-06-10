@@ -266,6 +266,42 @@ This is the strongest concrete case for the structure-sensitive
 referee on the roadmap, and `crtDisplay` doubles as a period-faithful
 preview stage meanwhile.
 
+### Display-aware matching
+
+The display model's real payoff is on the *matching* side:
+`GlyphMatcher.SetBeamSigma` scores candidates as their CRT'd appearance
+instead of their 1-bit masks. Each glyph's mask is convolved with the
+beam PSF and quantized to coverage levels (cell-local, cross-cell bleed
+not modeled); per (fg, bg) pair the matcher builds a ladder of
+linear-light blends and charges each pixel the distance to its
+coverage level's blend, with a per-pixel-minimum floor for pruning —
+the display-model analogue of the ideal mask. Diffusion residuals are
+likewise measured against the blended appearance.
+
+Measured (mandrill / fox / wheel, diffusion on, blurred ΔE σ = 1 cell,
+hard-pixel scoring — quadrant dither shown for context):
+
+| image / palette | byte-matched | display-matched | 2×2 dither |
+|---|---|---|---|
+| mandrill ansi16 | 12.77 | **9.11** | 11.56 |
+| mandrill ansi256 | 3.79 | **3.03** | 3.52 |
+| fox ansi16 | 10.82 | 8.13 | 7.69 |
+| fox ansi256 | 4.76 | 3.89 | 3.81 |
+| wheel ansi16 | 13.68 | 10.05 | 9.29 |
+| wheel ansi256 | 5.23 | 3.32 | 2.40 |
+
+Display-aware matching improves the matcher 18–36% across the board —
+on raw hard-pixel scoring, not just under the display model, because
+the blend-ladder objective is coverage-aware: it selects (glyph, fg,
+bg) whose area-weighted appearance matches the cell, where the 1-bit
+objective demands per-pixel mask agreement and so favors harsh
+ink-on-ground pairings. The glyph matcher now **beats the quadrant
+dither on the mandrill at both palettes**, ties it on fox-256, and
+closes the wheel gap from 2.2× to 1.4×. Visual verification: the gain
+is real texture/color selection, not metric-gaming — softer pairings,
+smoother fur, no smearing
+([comparisons/mandrill-ansi256_displaymatch.png](comparisons/mandrill-ansi256_displaymatch.png)).
+
 A dither-vs-matcher comparison conflates two variables: the cell
 REPRESENTATION (2×2 quadrants vs 8×8 glyphs) and ERROR DIFFUSION (the
 dither has it, the matcher does not yet). The harness therefore carries

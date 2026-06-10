@@ -285,6 +285,92 @@ func TestGlyphMatcherRestrictAlphabet(t *testing.T) {
 	}
 }
 
+// TestGlyphMatcherBeamSigma pins the display-aware matching contract:
+// footprints of known glyphs quantize sensibly, hard-glyph input still
+// resolves to its own glyph under a moderate beam, zero restores exact
+// matching, negative sigma is rejected, and the mode is deterministic.
+func TestGlyphMatcherBeamSigma(t *testing.T) {
+	r := NewRenderer(WithPalette("ansi16"))
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewGlyphMatcher(r, font)
+
+	// Footprint sanity: a full block blurs to full coverage everywhere;
+	// an empty mask stays empty.
+	full := glyphFootprint(^uint64(0), 0.5)
+	empty := glyphFootprint(0, 0.5)
+	for i := 0; i < cellPixels; i++ {
+		if full[i] != footprintLevels-1 {
+			t.Fatalf("full block footprint not saturated at pixel %d: %d", i, full[i])
+		}
+		if empty[i] != 0 {
+			t.Fatalf("empty footprint not zero at pixel %d: %d", i, empty[i])
+		}
+	}
+
+	if err := m.SetBeamSigma(-1); err == nil {
+		t.Error("negative sigma should be rejected")
+	}
+	if err := m.SetBeamSigma(0.5); err != nil {
+		t.Fatal(err)
+	}
+	if m.footprints == nil || len(m.footprints) != len(m.masks) {
+		t.Fatal("footprints not built alongside masks")
+	}
+
+	// A cell that IS a glyph (hard pixels, max contrast) should still
+	// resolve to that glyph under a moderate beam: its own footprint is
+	// the closest displayed appearance to its hard rendering.
+	white := RGB{0xFF, 0xFF, 0xFF}
+	black := RGB{0x00, 0x00, 0x00}
+	for _, ch := range []rune{'O', '╋', '▚'} {
+		want, _ := font.GenuineGlyph(ch)
+		blocks := m.Convert(glyphCellImage(want, white, black),
+			imageutil.NewGrayImage(GlyphWidth, GlyphHeight))
+		gotMask, ok := font.GenuineGlyph(blocks[0][0].Rune)
+		if !ok || (gotMask != want && gotMask != ^want) {
+			t.Errorf("beam matching of hard %q chose %q", ch, blocks[0][0].Rune)
+		}
+	}
+
+	// Restriction rebuilds footprints too.
+	if err := m.RestrictAlphabet(AlphabetBlocks); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.footprints) != len(m.masks) {
+		t.Fatal("RestrictAlphabet did not rebuild footprints")
+	}
+
+	// Zero disables.
+	if err := m.SetBeamSigma(0); err != nil {
+		t.Fatal(err)
+	}
+	if m.footprints != nil {
+		t.Fatal("zero sigma should clear footprints")
+	}
+
+	// Deterministic under beam matching.
+	if err := m.RestrictAlphabet(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetBeamSigma(0.5); err != nil {
+		t.Fatal(err)
+	}
+	ramp := makeColorRamp(64, 32)
+	rampEdges := imageutil.NewGrayImage(64, 32)
+	a := m.Convert(ramp.Clone(), rampEdges)
+	b := m.Convert(ramp.Clone(), rampEdges)
+	for cy := range a {
+		for cx := range a[cy] {
+			if a[cy][cx] != b[cy][cx] {
+				t.Fatalf("beam matching non-deterministic at (%d,%d)", cx, cy)
+			}
+		}
+	}
+}
+
 // TestGlyphMatcherDeterministic guards the sorted-glyph and sorted-
 // anchor tie-breaking: identical input must produce identical output.
 func TestGlyphMatcherDeterministic(t *testing.T) {
