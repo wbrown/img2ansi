@@ -117,11 +117,13 @@ func decodeGlyphData(data []byte) (*FontBitmaps, error) {
 		return nil, fmt.Errorf("failed to decode glyph data: %w", err)
 	}
 
-	return &FontBitmaps{
+	fb := &FontBitmaps{
 		glyphs:   glyphData.Glyphs,
 		fallback: make(map[rune]GlyphBitmap),
 		name:     glyphData.FontName,
-	}, nil
+	}
+	fb.synthesizeBlockGlyphs()
+	return fb, nil
 }
 
 // LoadROMFont parses a classic PC ROM font dump: 256 glyphs of 8 row
@@ -154,11 +156,51 @@ func LoadROMFont(data []byte, name string) (*FontBitmaps, error) {
 		glyphs[cp437ToUnicode[c]] = g
 	}
 
-	return &FontBitmaps{
+	fb := &FontBitmaps{
 		glyphs:   glyphs,
 		fallback: make(map[rune]GlyphBitmap),
 		name:     name,
-	}, nil
+	}
+	fb.synthesizeBlockGlyphs()
+	return fb, nil
+}
+
+// synthesizeBlockGlyphs fills the fallback map with procedurally built
+// bitmaps for the 16 quadrant block characters the dither pipeline can
+// emit. These characters have exact geometric definitions, so when a
+// font does not provide them — CP437 fonts carry only 6 of the 16, and
+// a TTF's missing-glyph box is far worse than no glyph — the correct
+// bitmap is constructed. Font-provided glyphs always take precedence.
+func (fb *FontBitmaps) synthesizeBlockGlyphs() {
+	for _, b := range Blocks {
+		if _, ok := fb.glyphs[b.Rune]; ok {
+			continue
+		}
+		if _, ok := fb.fallback[b.Rune]; ok {
+			continue
+		}
+		fb.fallback[b.Rune] = glyphFromQuadrants(b.Quad)
+	}
+}
+
+// glyphFromQuadrants builds an 8x8 bitmap from a 2x2 quadrant pattern,
+// each quadrant covering a 4x4 region of the cell.
+func glyphFromQuadrants(q Quadrants) GlyphBitmap {
+	var g GlyphBitmap
+	quads := [4]bool{q.TopLeft, q.TopRight, q.BottomLeft, q.BottomRight}
+	for i, filled := range quads {
+		if !filled {
+			continue
+		}
+		baseX := (i % 2) * (GlyphWidth / 2)
+		baseY := (i / 2) * (GlyphHeight / 2)
+		for y := 0; y < GlyphHeight/2; y++ {
+			for x := 0; x < GlyphWidth/2; x++ {
+				g.SetBit(baseX+x, baseY+y, true)
+			}
+		}
+	}
+	return g
 }
 
 // Name returns the font's name.

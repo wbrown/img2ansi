@@ -248,8 +248,21 @@ func computeFromTTF(fontPath string) (*img2ansi.FontGlyphData, error) {
 		FontName: fontPath,
 		Glyphs:   make(map[rune]img2ansi.GlyphBitmap),
 	}
+	// Skip runes the font does not map: rendering them would silently
+	// embed the font's missing-glyph box (a '?' in PxPlus IBM BIOS) in
+	// place of the character. Absent glyphs let the library synthesize
+	// geometric block characters or fall back cleanly at render time.
+	var skipped []rune
 	for _, ch := range glyphSet() {
+		if ttf.Index(ch) == 0 {
+			skipped = append(skipped, ch)
+			continue
+		}
 		data.Glyphs[ch] = r.render(ch)
+	}
+	if len(skipped) > 0 {
+		log.Printf("Skipped %d runes with no glyph in this font: %q",
+			len(skipped), string(skipped))
 	}
 	return data, nil
 }

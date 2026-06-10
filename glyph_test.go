@@ -188,6 +188,56 @@ func TestLoadEmbeddedFont(t *testing.T) {
 	}
 }
 
+// TestBlockGlyphsCoverDitherOutput verifies every rune the dither
+// pipeline can emit resolves to a bitmap matching its exact quadrant
+// geometry. This is the regression test for the .notdef poisoning bug:
+// PxPlus IBM BIOS has no glyphs for the 10 quadrant-only runes, and the
+// generator used to embed the font's missing-glyph box (an inverse '?')
+// for them, which RenderBlocks then drew all over dithered output.
+func TestBlockGlyphsCoverDitherOutput(t *testing.T) {
+	fb, err := LoadEmbeddedFont("pxplus_ibm_bios")
+	if err != nil {
+		t.Fatalf("LoadEmbeddedFont failed: %v", err)
+	}
+
+	for _, b := range Blocks {
+		g, ok := fb.GetGlyph(b.Rune)
+		if !ok {
+			t.Errorf("no glyph for dither rune %q", b.Rune)
+			continue
+		}
+		want := glyphFromQuadrants(b.Quad)
+		if g != want {
+			t.Errorf("glyph %q does not match its quadrant geometry:\ngot:\n%vwant:\n%v",
+				b.Rune, g, want)
+		}
+	}
+}
+
+// TestSynthesizeBlockGlyphs verifies synthesis fills only missing block
+// characters and never overrides font-provided glyphs.
+func TestSynthesizeBlockGlyphs(t *testing.T) {
+	notQuiteFull := ^GlyphBitmap(1) // a font's own (odd) full block
+	fb := &FontBitmaps{
+		glyphs:   map[rune]GlyphBitmap{'█': notQuiteFull},
+		fallback: make(map[rune]GlyphBitmap),
+		name:     "test",
+	}
+	fb.synthesizeBlockGlyphs()
+
+	if g, _ := fb.GetGlyph('█'); g != notQuiteFull {
+		t.Error("synthesis must not override a font-provided glyph")
+	}
+	g, ok := fb.GetGlyph('▘')
+	if !ok {
+		t.Fatal("synthesis should provide missing quadrant glyphs")
+	}
+	want := glyphFromQuadrants(Quadrants{TopLeft: true})
+	if g != want {
+		t.Errorf("synthesized ▘ wrong:\ngot:\n%vwant:\n%v", g, want)
+	}
+}
+
 func popcount(g GlyphBitmap) int {
 	count := 0
 	for i := 0; i < 64; i++ {

@@ -64,9 +64,10 @@ passes the block checks while smearing every single-pixel stroke into
 two rows: 225 of 233 glyphs wrong, 1817 pixels changed, all while the
 calibration looked "perfect." The ambiguity criterion catches this.
 
-With correct calibration the result is **bit-identical to the existing
-embedded data** (0 glyphs differ, ambiguity 0.00) — which both validates
-the old data and gives us a regression check:
+With correct calibration the result is **bit-identical to the original
+embedded data** (0 glyphs differ, ambiguity 0.00) for every rune the
+font actually maps — which validates those glyphs and gives us a
+regression check:
 
 ```bash
 cd cmd/compute_glyphs && go build .
@@ -81,6 +82,30 @@ CLAUDE.md are confirmed real font behavior, not rasterization bugs —
 `|` genuinely has a gap at row 3 (the CP437 broken-bar tradition), `+`
 genuinely sits left of center (column 7 is the spacing column in 8×8
 glyph design).
+
+### The .notdef poisoning (the second footgun)
+
+Bit-identical agreement between two rasterizers says nothing about runes
+the font does not map: `DrawString` happily renders the font's
+missing-glyph box for those, and both the original generator and the
+first port embedded it. In PxPlus IBM BIOS that box is an inverse-video
+`?`, and **89 runes** of the research glyph set are unmapped — including
+all 10 quadrant-only blocks (`▘▝▖▗▚▞▛▜▙▟`, which are not CP437) that the
+dither pipeline emits constantly. Result: question marks all over every
+font-rendered dither, with `GetGlyph` reporting the glyphs as present.
+
+Fixes, in both directions:
+
+- `compute_glyphs` skips runes with no glyph mapping (`Index == 0`) and
+  logs them, so missing coverage is visible instead of poisoned.
+- The library synthesizes the 16 quadrant block characters from their
+  exact geometric definitions when a font lacks them
+  (`synthesizeBlockGlyphs`, into the fallback map so genuine font glyphs
+  always win). CP437 fonts provide only 6 of the 16, so this path is the
+  norm, not the exception — it is what makes `RenderBlocks` usable on
+  dither output with ROM-derived fonts at all.
+- `TestBlockGlyphsCoverDitherOutput` pins every rune the dither can emit
+  to its exact quadrant geometry.
 
 ## Findings carried over from the experiment log
 

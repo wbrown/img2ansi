@@ -421,7 +421,18 @@ Key findings so far:
    left of center (column 7 is the spacing column). "Obvious" matches
    may not work as expected — that is the font, not the loader.
 
-4. **Not integrated**: glyph rendering exists (`FontBitmaps.RenderBlocks`)
+4. **A font cannot say no — check coverage explicitly.** `DrawString`
+   renders the missing-glyph box for unmapped runes (an inverse '?' in
+   PxPlus IBM BIOS). 89 runes of the research set — including all 10
+   quadrant-only blocks the dither emits — were once embedded as
+   identical '?' boxes that `GetGlyph` reported as present, drawing
+   question marks all over rendered output. `compute_glyphs` now skips
+   unmapped runes, the library synthesizes the 16 geometric quadrant
+   blocks when absent (`synthesizeBlockGlyphs`), and
+   `TestBlockGlyphsCoverDitherOutput` pins all 16 dither runes to their
+   exact quadrant geometry.
+
+5. **Not integrated**: glyph rendering exists (`FontBitmaps.RenderBlocks`)
    but no glyph *matcher* is wired into the converter. The old 70/20/10
    similarity scorer is intentionally retired in favor of the
    ideal-mask + weighted-Hamming (XOR/popcount) search described in
