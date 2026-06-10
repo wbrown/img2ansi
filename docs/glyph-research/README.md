@@ -237,7 +237,8 @@ pins it). Measured on mandrill-ansi256 with diffusion: full alphabet
 ΔE 3.79, blocks+box 3.83, ASCII-only 4.11 — alphabet choice is an
 aesthetics knob, nearly free on tone; letterforms are not a fidelity
 source. The hybrid converter (roadmap #1) removes smooth regions from
-glyph duty entirely.
+glyph duty entirely. Side-by-side:
+[comparisons/mandrill-ansi256_alphabets.png](comparisons/mandrill-ansi256_alphabets.png).
 
 A dither-vs-matcher comparison conflates two variables: the cell
 REPRESENTATION (2×2 quadrants vs 8×8 glyphs) and ERROR DIFFUSION (the
