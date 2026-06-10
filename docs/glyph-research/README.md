@@ -300,7 +300,35 @@ dither on the mandrill at both palettes**, ties it on fox-256, and
 closes the wheel gap from 2.2× to 1.4×. Visual verification: the gain
 is real texture/color selection, not metric-gaming — softer pairings,
 smoother fur, no smearing
-([comparisons/mandrill-ansi256_displaymatch.png](comparisons/mandrill-ansi256_displaymatch.png)).
+([comparisons/mandrill-ansi256_displaymatch.png](comparisons/mandrill-ansi256_displaymatch.png),
+[16-color version](comparisons/mandrill-ansi16_displaymatch.png)).
+
+### Which color metric — matching vs judging
+
+Two metrics are in play and they were never the same: every renderer in
+the harness uses the `Renderer` default, **Redmean**, for matching and
+search distances (nothing ever set `WithColorMethod`), while the
+scoring referee (`blurredLabError`) judges in **LAB ΔE**. Every
+standings number above is Redmean-matched unless labeled. Aligning the
+objective with the referee is worth ~20% to both converters (mandrill,
+display-aware matcher with diffusion, blurred ΔE σ = 1 cell):
+
+| arm / matching metric | RGB | Redmean | LAB |
+|---|---|---|---|
+| quadrant dither, ansi16 | — | 11.56 | 9.23 |
+| display matcher, ansi16 | 9.09 | 9.11 | **7.26** |
+| quadrant dither, ansi256 | — | 3.52 | 2.57 |
+| display matcher, ansi256 | 3.19 | 3.03 | **2.42** |
+
+Aligned LAB-vs-LAB, the display-aware matcher still beats the dither at
+both palettes (7.26 vs 9.23; 2.42 vs 2.57) — the headline survives the
+fairness correction. Naive RGB and Redmean are nearly tied for the
+matcher on this image. The cost: `LABMethod.Distance` converts both
+colors per call, so LAB matching at 256 colors runs roughly an order
+of magnitude slower than Redmean (the ansi256 LAB dither cell needs a
+standalone runner — 12.5 minutes — and is why it is absent from the
+committed harness tests). A `toLab` memoization would make LAB
+matching practical; it is a perf item, not a design limit.
 
 A dither-vs-matcher comparison conflates two variables: the cell
 REPRESENTATION (2×2 quadrants vs 8×8 glyphs) and ERROR DIFFUSION (the
