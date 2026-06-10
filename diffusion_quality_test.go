@@ -3,8 +3,6 @@ package img2ansi
 import (
 	"fmt"
 	"image"
-	"image/color"
-	"image/draw"
 	"math"
 	"os"
 	"path/filepath"
@@ -14,8 +12,12 @@ import (
 	"github.com/wbrown/img2ansi/imageutil"
 )
 
-// This file is the diffusion quality harness. It renders BlockRune output
-// back to pixels and scores it against the pre-dither reference image.
+// These are the diffusion and converter quality tests. The shared
+// measurement machinery — the blurred-LAB metric, the display-geometry
+// chain, the cross-converter arm runner, the CRT display model — lives
+// in harness.go, where cmd/quality reaches it too; this file holds the
+// tests, their control arms, and the legacy 2x2 rendering used by the
+// original diffusion harness.
 //
 // The primary metric is low-pass perceptual error: both images are blurred
 // with a Gaussian approximating viewing distance, then compared as mean
@@ -86,90 +88,6 @@ func ditherNoDiffusion(r *Renderer, img *imageutil.RGBAImage, edges *imageutil.G
 		}
 	}
 	return result
-}
-
-// gaussianBlurPlanes applies a separable Gaussian blur to an image,
-// returning per-pixel RGB float triples (edge pixels use clamped sampling).
-func gaussianBlurPlanes(img *imageutil.RGBAImage, sigma float64) [][][3]float64 {
-	width, height := img.Width(), img.Height()
-	radius := int(math.Ceil(3 * sigma))
-	kernel := make([]float64, 2*radius+1)
-	var sum float64
-	for i := range kernel {
-		d := float64(i - radius)
-		kernel[i] = math.Exp(-d * d / (2 * sigma * sigma))
-		sum += kernel[i]
-	}
-	for i := range kernel {
-		kernel[i] /= sum
-	}
-
-	clamp := func(v, hi int) int {
-		if v < 0 {
-			return 0
-		}
-		if v >= hi {
-			return hi - 1
-		}
-		return v
-	}
-
-	// Horizontal pass
-	horiz := make([][][3]float64, height)
-	for y := 0; y < height; y++ {
-		horiz[y] = make([][3]float64, width)
-		for x := 0; x < width; x++ {
-			var acc [3]float64
-			for k, w := range kernel {
-				p := img.GetRGB(clamp(x+k-radius, width), y)
-				acc[0] += float64(p.R) * w
-				acc[1] += float64(p.G) * w
-				acc[2] += float64(p.B) * w
-			}
-			horiz[y][x] = acc
-		}
-	}
-
-	// Vertical pass
-	out := make([][][3]float64, height)
-	for y := 0; y < height; y++ {
-		out[y] = make([][3]float64, width)
-		for x := 0; x < width; x++ {
-			var acc [3]float64
-			for k, w := range kernel {
-				p := horiz[clamp(y+k-radius, height)][x]
-				acc[0] += p[0] * w
-				acc[1] += p[1] * w
-				acc[2] += p[2] * w
-			}
-			out[y][x] = acc
-		}
-	}
-	return out
-}
-
-// blurredLabError blurs both images with the given sigma and returns the
-// mean delta-E (CIE76, via LAB) between them. This is the primary
-// diffusion quality metric: it measures local average tone accuracy.
-func blurredLabError(a, b *imageutil.RGBAImage, sigma float64) float64 {
-	pa := gaussianBlurPlanes(a, sigma)
-	pb := gaussianBlurPlanes(b, sigma)
-	lab := LABMethod{}
-	var total float64
-	var count int
-	toRGB := func(p [3]float64) RGB {
-		c := func(v float64) uint8 {
-			return uint8(math.Max(0, math.Min(255, math.Round(v))))
-		}
-		return RGB{c(p[0]), c(p[1]), c(p[2])}
-	}
-	for y := range pa {
-		for x := range pa[y] {
-			total += lab.Distance(toRGB(pa[y][x]), toRGB(pb[y][x]))
-			count++
-		}
-	}
-	return total / float64(count)
 }
 
 // rawMSE returns the unblurred per-channel mean squared error.
@@ -252,9 +170,9 @@ func measureArms(t *testing.T, name string, r *Renderer, img *imageutil.RGBAImag
 		rendered := renderBlocksToImage(blocks)
 		res := diffusionResult{
 			name:        fmt.Sprintf("%s/%s", name, arm.name),
-			labSigma1:   blurredLabError(rendered, reference, 1),
-			labSigma2:   blurredLabError(rendered, reference, 2),
-			labSigma4:   blurredLabError(rendered, reference, 4),
+			labSigma1:   BlurredLabError(rendered, reference, 1),
+			labSigma2:   BlurredLabError(rendered, reference, 2),
+			labSigma4:   BlurredLabError(rendered, reference, 4),
 			mse:         rawMSE(rendered, reference),
 			transitions: countColorTransitions(blocks),
 		}
@@ -322,165 +240,28 @@ func makeColorRamp(width, height int) *imageutil.RGBAImage {
 	return img
 }
 
-// --- Cross-converter harness -------------------------------------------
-//
-// Any BlockConverter can be scored against any other on the same cell
-// grid: each arm's input is prepared at its native source resolution
-// (SourcePixelsPerCell), its output rendered back to pixels at a common
-// scoring resolution, and all arms compared against the same reference.
-
-// scorePxPerCell is the common resolution converter arms are scored at:
-// every arm's output is rendered at 8 px per cell and compared against
-// a reference prepared at the same size.
-const scorePxPerCell = GlyphWidth
-
-// converterArm pairs a BlockConverter with a renderer that turns its
-// output back into pixels at scorePxPerCell for scoring.
-type converterArm struct {
-	name   string
-	conv   BlockConverter
-	render func([][]BlockRune) *imageutil.RGBAImage
-}
-
-// quadrantArm scores a Renderer's quadrant dither, rendered via the
-// quadrant geometry table.
-func quadrantArm(name string, r *Renderer) converterArm {
-	return converterArm{
-		name: name,
-		conv: r,
-		render: func(blocks [][]BlockRune) *imageutil.RGBAImage {
-			return renderBlocksToImageScaled(blocks, scorePxPerCell)
-		},
-	}
-}
-
-// fontArm scores a converter whose output is rendered through font
-// glyph bitmaps.
-func fontArm(name string, conv BlockConverter, font *FontBitmaps) converterArm {
-	return converterArm{
-		name: name,
-		conv: conv,
-		render: func(blocks [][]BlockRune) *imageutil.RGBAImage {
-			return imageutil.RGBAImageFromImage(
-				font.RenderBlocks(blocks, scorePxPerCell/GlyphWidth))
-		},
-	}
-}
-
-// imageSource produces the source content at a requested pixel size,
-// with its edge map. Synthetic patterns regenerate analytically so each
-// arm sees the same content at its native resolution; photos go through
-// the standard prepare pipeline.
-type imageSource func(pxW, pxH int) (*imageutil.RGBAImage, *imageutil.GrayImage)
-
-func syntheticSource(gen func(w, h int) *imageutil.RGBAImage) imageSource {
-	return func(pxW, pxH int) (*imageutil.RGBAImage, *imageutil.GrayImage) {
-		return gen(pxW, pxH), imageutil.NewGrayImage(pxW, pxH)
-	}
-}
-
-func photoSource(img *imageutil.RGBAImage) imageSource {
-	return func(pxW, pxH int) (*imageutil.RGBAImage, *imageutil.GrayImage) {
-		return imageutil.PrepareForANSI(img, pxW/2, pxH/2)
-	}
-}
-
-// measureConverterArms runs each converter over the same cell grid and
-// scores every arm against the same reference at scorePxPerCell. Blur
-// sigma is expressed in cell widths so the metric is comparable across
-// converters regardless of their source resolution. With DIFFUSION_PNGS
-// set, a labeled side-by-side comparison image (reference plus every
-// arm) is written alongside the per-arm renders.
+// measureConverterArms adapts MeasureConverterArms (harness.go) to the
+// test: rows log through t.Logf, comparison renders land in the
+// DIFFUSION_PNGS directory when set, and scores come back keyed by arm
+// name for assertions.
 func measureConverterArms(
 	t *testing.T,
 	name string,
-	src imageSource,
+	src ImageSource,
 	cellsW, cellsH int,
-	arms []converterArm,
+	arms []ConverterArm,
 ) map[string]float64 {
 	t.Helper()
-	reference, _ := src(cellsW*scorePxPerCell, cellsH*scorePxPerCell)
-
-	labels := []string{"reference"}
-	panels := []*imageutil.RGBAImage{reference}
-
-	results := make(map[string]float64)
-	for _, arm := range arms {
-		k := arm.conv.SourcePixelsPerCell()
-		input, edges := src(cellsW*k, cellsH*k)
-		blocks := arm.conv.Convert(input, edges)
-		rendered := arm.render(blocks)
-
-		halfCell := blurredLabError(rendered, reference, 0.5*scorePxPerCell)
-		oneCell := blurredLabError(rendered, reference, 1.0*scorePxPerCell)
-		results[arm.name] = oneCell
-		t.Logf("%-14s %-18s blurredΔE σ=0.5cell %6.2f  σ=1cell %6.2f",
-			name, arm.name, halfCell, oneCell)
-
-		labels = append(labels, fmt.Sprintf("%s dE=%.2f", arm.name, oneCell))
-		panels = append(panels, rendered)
-
-		if dir := os.Getenv("DIFFUSION_PNGS"); dir != "" {
-			path := filepath.Join(dir, fmt.Sprintf("%s_%s.png", name, arm.name))
-			if err := imageutil.SavePNG(rendered.RGBA, path); err != nil {
-				t.Logf("could not save %s: %v", path, err)
-			}
-		}
+	scores, _, err := MeasureConverterArms(
+		name, src, cellsW, cellsH, arms, t.Logf, os.Getenv("DIFFUSION_PNGS"))
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	if dir := os.Getenv("DIFFUSION_PNGS"); dir != "" {
-		font, err := LoadEmbeddedFont("font8x8")
-		if err != nil {
-			t.Fatalf("loading label font: %v", err)
-		}
-		path := filepath.Join(dir, fmt.Sprintf("%s_compare.png", name))
-		if err := imageutil.SavePNG(composeComparison(font, labels, panels), path); err != nil {
-			t.Logf("could not save %s: %v", path, err)
-		}
+	results := make(map[string]float64, len(scores))
+	for _, s := range scores {
+		results[s.Name] = s.OneCell
 	}
 	return results
-}
-
-// composeComparison stacks labeled panels vertically into a single
-// comparison image. Labels are rendered through the font's own glyphs.
-func composeComparison(font *FontBitmaps, labels []string, panels []*imageutil.RGBAImage) *image.RGBA {
-	const gutter = 4
-	labelH := GlyphHeight
-
-	width, height := 0, gutter
-	for _, p := range panels {
-		if p.Width() > width {
-			width = p.Width()
-		}
-		height += labelH + 2 + p.Height() + gutter
-	}
-
-	dark := color.RGBA{24, 24, 24, 255}
-	out := image.NewRGBA(image.Rect(0, 0, width+2*gutter, height))
-	draw.Draw(out, out.Bounds(), &image.Uniform{dark}, image.Point{}, draw.Src)
-
-	y := gutter
-	for i, p := range panels {
-		row := make([]BlockRune, 0, len(labels[i]))
-		for _, ch := range labels[i] {
-			row = append(row, BlockRune{
-				Rune: ch,
-				FG:   RGB{255, 255, 255},
-				BG:   RGB{24, 24, 24},
-			})
-		}
-		lbl := font.RenderBlocks([][]BlockRune{row}, 1)
-		draw.Draw(out,
-			image.Rect(gutter, y, gutter+lbl.Bounds().Dx(), y+labelH),
-			lbl, image.Point{}, draw.Src)
-		y += labelH + 2
-
-		draw.Draw(out,
-			image.Rect(gutter, y, gutter+p.Width(), y+p.Height()),
-			p.RGBA, image.Point{}, draw.Src)
-		y += p.Height() + gutter
-	}
-	return out
 }
 
 // nearestFg maps a color to the nearest foreground palette color using
@@ -542,10 +323,11 @@ func (m meanColorConverter) Convert(img *imageutil.RGBAImage, edges *imageutil.G
 // TestConverterArms exercises the cross-converter harness end to end:
 // the quadrant dither, the glyph matcher, and an 8x8 full-block
 // mean-color baseline run on the same cell grid under both the ansi16
-// and ansi256 palettes, render through their own paths (quadrant table
-// vs font glyphs), and score against the same reference. The original
-// research found 256 colors rescue 8x8 matching; this is where that
-// claim is measured.
+// and ansi256 palettes, all rendered through font glyphs and the
+// display chain (the quadrant runes are font glyphs like any others),
+// and scored against the same reference. Photos size width-first to
+// the full 80 columns, rows following the source aspect (FitGrid);
+// synthetics use the 80x25 screen.
 func TestConverterArms(t *testing.T) {
 	font, err := LoadEmbeddedFont("font8x8")
 	if err != nil {
@@ -553,13 +335,12 @@ func TestConverterArms(t *testing.T) {
 	}
 
 	patterns := []struct {
-		name           string
-		src            imageSource
-		cellsW, cellsH int
+		name string
+		src  ImageSource
 	}{
-		{"gray-gradient", syntheticSource(makeGradient), 64, 16},
-		{"fleshtone", syntheticSource(makeFleshtone), 64, 16},
-		{"color-ramp", syntheticSource(makeColorRamp), 64, 32},
+		{"gray-gradient", SyntheticSource(makeGradient)},
+		{"fleshtone", SyntheticSource(makeFleshtone)},
+		{"color-ramp", SyntheticSource(makeColorRamp)},
 	}
 
 	for _, pal := range []string{"ansi16", "ansi256"} {
@@ -567,23 +348,17 @@ func TestConverterArms(t *testing.T) {
 			r := NewRenderer(WithPalette(pal))
 			diffusedMatcher := NewGlyphMatcher(r, font)
 			diffusedMatcher.Diffusion = true
-			arms := []converterArm{
-				quadrantArm("quadrant-dither", r),
-				{
-					name: "quadrant-no-diff",
-					conv: noDiffusionQuadrant{r},
-					render: func(blocks [][]BlockRune) *imageutil.RGBAImage {
-						return renderBlocksToImageScaled(blocks, scorePxPerCell)
-					},
-				},
-				fontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
-				fontArm("glyph-matcher-diff", diffusedMatcher, font),
-				fontArm("mean-color-block", meanColorConverter{r}, font),
+			arms := []ConverterArm{
+				FontArm("quadrant-dither", r, font),
+				FontArm("quadrant-no-diff", noDiffusionQuadrant{r}, font),
+				FontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
+				FontArm("glyph-matcher-diff", diffusedMatcher, font),
+				FontArm("mean-color-block", meanColorConverter{r}, font),
 			}
 
 			for _, p := range patterns {
 				res := measureConverterArms(t, p.name+"-"+pal,
-					p.src, p.cellsW, p.cellsH, arms)
+					p.src, targetCols, targetRows, arms)
 				if res["quadrant-dither"] >= res["mean-color-block"] {
 					t.Errorf("%s/%s: quadrant dither (ΔE %.2f) should beat the mean-color baseline (ΔE %.2f)",
 						p.name, pal, res["quadrant-dither"], res["mean-color-block"])
@@ -603,7 +378,7 @@ func TestConverterArms(t *testing.T) {
 				// the undiffused matcher by a wide margin. The gray
 				// gradient is excluded: at 256 colors it is nearly
 				// exactly representable, and diffusing sub-quantum
-				// residuals adds noise (measured: 0.36 -> 0.62).
+				// residuals adds noise (measured: 0.45 -> 0.63).
 				if p.name != "gray-gradient" &&
 					res["glyph-matcher-diff"] >= res["glyph-matcher"] {
 					t.Errorf("%s/%s: diffused matcher (ΔE %.2f) should beat the undiffused matcher (ΔE %.2f)",
@@ -617,14 +392,96 @@ func TestConverterArms(t *testing.T) {
 				if err != nil {
 					continue
 				}
-				cellsW := 100
-				aspect := float64(img.Width()) / float64(img.Height())
-				cellsH := int(float64(cellsW) / aspect / 2.0)
+				cols, rows := FitGrid(float64(img.Width()) / float64(img.Height()))
 				name := filepath.Base(path)
 				measureConverterArms(t, name[:len(name)-len(".png")]+"-"+pal,
-					photoSource(img), cellsW, cellsH, arms)
+					PhotoSource(img), cols, rows, arms)
 			}
 		})
+	}
+}
+
+// TestAlphabetLadderUnderCRT scores the matcher's alphabet ladder both
+// as raw rectangle pixels and through the CRT display model. The 8x8
+// fonts assume a beam-spot low-pass, so letterform spacing columns are
+// penalized by hard-pixel scoring in a way no period display ever
+// showed; the display model measures how much of that penalty is a
+// rendering anachronism.
+func TestAlphabetLadderUnderCRT(t *testing.T) {
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := imageutil.LoadImage("images/mandrill.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cols, rows := FitGrid(float64(img.Width()) / float64(img.Height()))
+	screenW, screenH := screenDims(cols, rows)
+	src := PhotoSource(img)
+	reference, _ := src(screenW, screenH)
+
+	const beamSigma = 0.5 // beam spot, in font pixels
+
+	renderArm := func(m *GlyphMatcher) *imageutil.RGBAImage {
+		input, edges := src(cols*scorePxPerCell, rows*scorePxPerCell)
+		return displayView(imageutil.RGBAImageFromImage(
+			font.RenderBlocks(m.Convert(input, edges), 1)), screenH)
+	}
+
+	alphabets := []struct {
+		name  string
+		runes []rune
+	}{
+		{"full", nil},
+		{"blocks+box", append(append([]rune{}, AlphabetBlocks...), AlphabetBoxDrawing...)},
+		{"ascii", AlphabetASCII},
+	}
+
+	for _, pal := range []string{"ansi16", "ansi256"} {
+		r := NewRenderer(WithPalette(pal))
+		for _, a := range alphabets {
+			m := NewGlyphMatcher(r, font)
+			m.Diffusion = true
+			if err := m.RestrictAlphabet(a.runes); err != nil {
+				t.Fatal(err)
+			}
+			rendered := renderArm(m)
+			raw := BlurredLabError(rendered, reference, 1.0*scorePxPerCell)
+			crt := BlurredLabError(CRTDisplay(rendered, beamSigma), reference, 1.0*scorePxPerCell)
+			t.Logf("%-8s %-11s ΔE raw=%6.2f  crt(σ=%.1f)=%6.2f  (%+.0f%%)",
+				pal, a.name, raw, beamSigma, crt, (crt/raw-1)*100)
+		}
+
+		// Display-aware matching: the matcher scores candidates as their
+		// CRT'd appearance (SetBeamSigma), so its objective aligns with
+		// the CRT-scored metric. Judged as displayed, matching what the
+		// display shows should not lose to matching what the bytes say.
+		byteMatched := NewGlyphMatcher(r, font)
+		byteMatched.Diffusion = true
+		displayMatched := NewGlyphMatcher(r, font)
+		displayMatched.Diffusion = true
+		if err := displayMatched.SetBeamSigma(beamSigma); err != nil {
+			t.Fatal(err)
+		}
+		crtScores := make(map[string]float64)
+		for _, m := range []struct {
+			name    string
+			matcher *GlyphMatcher
+		}{{"byte-matched", byteMatched}, {"display-matched", displayMatched}} {
+			rendered := renderArm(m.matcher)
+			raw := BlurredLabError(rendered, reference, 1.0*scorePxPerCell)
+			crt := BlurredLabError(CRTDisplay(rendered, beamSigma), reference, 1.0*scorePxPerCell)
+			crtScores[m.name] = crt
+			t.Logf("%-8s %-15s ΔE raw=%6.2f  crt(σ=%.1f)=%6.2f",
+				pal, m.name, raw, beamSigma, crt)
+		}
+		// Objective alignment: judged as displayed, matching what the
+		// display shows must not lose to matching what the bytes say.
+		if crtScores["display-matched"] >= crtScores["byte-matched"] {
+			t.Errorf("%s: display-matched (ΔE %.2f) should beat byte-matched (ΔE %.2f) under the display model",
+				pal, crtScores["display-matched"], crtScores["byte-matched"])
+		}
 	}
 }
 
@@ -666,7 +523,7 @@ func TestBlockAlphabetQuality(t *testing.T) {
 
 	score := func(r *Renderer, img *imageutil.RGBAImage, edges *imageutil.GrayImage, ref *imageutil.RGBAImage) float64 {
 		blocks := r.BrownDitherForBlocks(img.Clone(), edges)
-		return blurredLabError(renderBlocksToImage(blocks), ref, 2)
+		return BlurredLabError(renderBlocksToImage(blocks), ref, 2)
 	}
 
 	measure := func(name string, img *imageutil.RGBAImage, edges *imageutil.GrayImage, assert bool) {
@@ -710,8 +567,8 @@ func TestBlockAlphabetQuality(t *testing.T) {
 }
 
 func TestDiffusionQualityPhotos(t *testing.T) {
-	// testdata/mandrill.tiff is committed; images/*.png is an optional
-	// local corpus for broader measurement runs (kept out of the repo).
+	// testdata/mandrill.tiff is committed; images/*.png is the committed
+	// reference corpus (see images/README.md).
 	photos, _ := filepath.Glob("images/*.png")
 	photos = append([]string{"testdata/mandrill.tiff"}, photos...)
 

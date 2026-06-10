@@ -20,6 +20,8 @@ This directory continues work from two research branches:
 | Glyph generation, geometry calibration, comparison/inspection tooling | `cmd/compute_glyphs/` |
 | Pre-rendered IBM BIOS glyphs (embedded) | `fontdata/pxplus_ibm_bios.glyphs` |
 | The TTF source for regeneration | `fonts/PxPlus_IBM_BIOS.ttf` |
+| Measurement harness: display chain, blurred-LAB scoring, `MeasureConverterArms`, CRT model | `harness.go` |
+| Standalone harness runner (sweeps, ladders, composites, over-budget cells) | `cmd/quality/` |
 
 **Deliberately not ported**: the multi-factor similarity scorer from
 `font-analysis` (`fonts.go` — shape/pattern/density/zone scoring with
@@ -148,7 +150,10 @@ r := img2ansi.NewRenderer(
   set is the font's genuine glyph map.
 
 Measured cost of the CP437 restriction (16 blocks → 6, identical ansi16
-palette, blurred ΔE σ=2, `TestBlockAlphabetQuality`, corrected tables):
+palette, blurred ΔE σ=2, `TestBlockAlphabetQuality`, corrected tables;
+this table predates the display-geometry chain and is scored on flat
+2×2 square-pixel renders — the within-table comparison is what matters
+and is unaffected):
 
 | image | 16-block | 6-block | restriction cost |
 |---|---|---|---|
@@ -194,15 +199,44 @@ type BlockConverter interface {
 }
 ```
 
-`measureConverterArms` (`diffusion_quality_test.go`) runs any set of
-converters over the same cell grid: each arm's input is prepared at its
-native source resolution, its output rendered back to pixels at a
-common 8 px/cell (quadrant geometry or font glyphs), and every arm is
-scored against the same reference with blur sigma expressed in *cell
-widths*, so numbers are comparable across source resolutions. With
-`DIFFUSION_PNGS=<dir>` set, the harness writes a labeled side-by-side
-comparison image per test image (labels rendered through font8x8);
-representative ones are committed under [comparisons/](comparisons/).
+`MeasureConverterArms` (`harness.go`) runs any set of converters over
+the same cell grid: each arm's input is prepared at its native source
+resolution, its output rendered through the display chain, and every
+arm is scored against the same reference with blur sigma expressed in
+*cell widths*, so numbers are comparable across source resolutions.
+
+**Display geometry.** The harness renders for the canonical 80-column
+text screen. Photos size **width-first**, like the CLI: `FitGrid`
+gives every image the full 80 columns and lets rows follow the source
+aspect uncapped, so portrait content renders taller than one 25-row
+screen and scrolls exactly as a terminal would show it (fox: 80×59;
+the square mandrill and wheel: 80×33; synthetic patterns, which have
+no native aspect, use the 80×25 screen). On a 4:3 CRT the 80-column
+modes displayed cells at ~1:2.4 — CGA 640×200 (8×8 glyphs at 1:2.4
+pixel aspect) and VGA 720×400 (9×16 cells) both land on exactly 1:2.4.
+The modeled chain: every cell renders as its 8×8 font glyph —
+including the quadrant dither's runes, which are font glyphs like any
+others, never idealized rectangles — then rows are scan-doubled to
+8×16 (what 400-line text modes did), then the CRT's 4:3 geometry adds
+the remaining ×1.2 vertical stretch. Rendered output and reference
+share the source image's true aspect; nothing is squashed. All
+standings below are measured under this chain.
+
+The same machinery is reachable two ways:
+
+- **Tests** (`diffusion_quality_test.go`): `TestConverterArms` is the
+  standings table, `TestAlphabetLadderUnderCRT` the alphabet/display
+  ladder. With `DIFFUSION_PNGS=<dir>` set, `TestConverterArms` writes
+  labeled side-by-side comparison images (labels rendered through
+  font8x8).
+- **`cmd/quality`**: the standalone runner for everything that exceeds
+  the test binary's time budget — LAB-matched dither cells (~12
+  minutes each), method sweeps, alphabet ladders, CRT-scored arms, and
+  the comparison composites committed under
+  [comparisons/](comparisons/). It drives the same exported harness
+  functions, so its numbers and the tests' numbers are the same
+  numbers. Out-of-tree copies of the scoring pipeline are how
+  measurement bugs are born; this tool exists so they never are.
 
 ## The glyph matcher
 
@@ -213,7 +247,8 @@ pair, `δᵢ = d(pᵢ, fg) − d(pᵢ, bg)` per pixel; a glyph's total error is
 the one nearest the ideal mask `{i : δᵢ < 0}` under |δ|-weighted
 Hamming distance — one XOR plus a bit-iteration per glyph, with early
 exit. Exhaustive search over the font's genuine glyphs is exact and
-cheap (~22s for the full six-image harness including three photos).
+cheap (the full six-image, five-arm, two-palette `TestConverterArms`
+run takes ~2.5 minutes at width-first grids).
 Candidate colors are the cell's dominant palette anchors (the heuristic
 the original research validated); `TestGlyphMatcherExactGlyph` pins the
 promise the old scorer never kept: a cell that IS a glyph matches that
@@ -234,11 +269,113 @@ as dither texture over smooth photo regions, each such cell carries a
 grid-aligned 1px background gutter — visually a systematic shift,
 though the registration is pixel-true (`TestGlyphMatcherMultiCellRoundTrip`
 pins it). Measured on mandrill-ansi256 with diffusion: full alphabet
-ΔE 3.79, blocks+box 3.83, ASCII-only 4.11 — alphabet choice is an
-aesthetics knob, nearly free on tone; letterforms are not a fidelity
-source. The hybrid converter (roadmap #1) removes smooth regions from
-glyph duty entirely. Side-by-side:
+ΔE 4.45, blocks+box 4.47, ASCII-only 4.95 (at ansi16: 13.24, 13.24,
+14.28 — blocks+box ties the full alphabet exactly there) — alphabet
+choice is an aesthetics knob, nearly free on tone; letterforms are not
+a fidelity source. The hybrid converter (roadmap #1) removes smooth
+regions from glyph duty entirely. Side-by-side:
 [comparisons/mandrill-ansi256_alphabets.png](comparisons/mandrill-ansi256_alphabets.png).
+
+### The CRT display model
+
+The gutter artifact stands out because our renderer is the first
+display these fonts were never designed for: axis-aligned rectangle
+pixels at infinite contrast. A CRT's beam spot low-passes — spacing
+columns read as "slightly dimmer," not hard black slots — and the 8×8
+designers drew against that. `CRTDisplay` (`harness.go`) models it: a
+normalized Gaussian beam-spot PSF convolved in **linear light** (glow
+adds in luminance, not sRGB code values), applied asymmetrically to the
+rendered side only.
+
+Measured (`TestAlphabetLadderUnderCRT`), the result is a finding about
+the *metric*, not the font: under the display model every alphabet
+shifts up uniformly (+2–3% at both palettes — a global linear-light
+brightening relative to the reference, alphabet-independent; the
+scan-doubled display chain absorbed most of what was an 8% shift at
+ansi256 under the old square-cell scoring). Blurred ΔE never charged
+the gutter penalty in the first
+place — that is *why* alphabet choice measured tone-neutral — so it
+cannot reward the cure either. The artifact and its cure are structure
+percepts, invisible to a tone metric that blurs at σ = 1 cell.
+Visually the model confirms the hypothesis completely: bloom fills the
+gutters and the cell grid recedes (see
+[comparisons/mandrill-ansi256_crt.png](comparisons/mandrill-ansi256_crt.png)).
+This is the strongest concrete case for the structure-sensitive
+referee on the roadmap, and `CRTDisplay` doubles as a period-faithful
+preview stage meanwhile (`cmd/quality -crt` writes the composites).
+
+### Display-aware matching
+
+The display model's real payoff is on the *matching* side:
+`GlyphMatcher.SetBeamSigma` scores candidates as their CRT'd appearance
+instead of their 1-bit masks. Each glyph's mask is convolved with the
+beam PSF and quantized to coverage levels (cell-local, cross-cell bleed
+not modeled); per (fg, bg) pair the matcher builds a ladder of
+linear-light blends and charges each pixel the distance to its
+coverage level's blend, with a per-pixel-minimum floor for pruning —
+the display-model analogue of the ideal mask. Diffusion residuals are
+likewise measured against the blended appearance.
+
+Measured (mandrill / fox / wheel, diffusion on, blurred ΔE σ = 1 cell,
+hard-pixel scoring — quadrant dither shown for context):
+
+| image / palette | byte-matched | display-matched | 2×2 dither |
+|---|---|---|---|
+| mandrill ansi16 | 13.24 | **9.65** | 12.26 |
+| mandrill ansi256 | 4.45 | **3.85** | 4.49 |
+| fox ansi16 | 11.73 | **9.19** | 9.30 |
+| fox ansi256 | 5.64 | **4.76** | 5.17 |
+| wheel ansi16 | 13.63 | 10.67 | 9.87 |
+| wheel ansi256 | 5.61 | 3.74 | 3.11 |
+
+Display-aware matching improves the matcher 13–33% across the board —
+on raw hard-pixel scoring, not just under the display model, because
+the blend-ladder objective is coverage-aware: it selects (glyph, fg,
+bg) whose area-weighted appearance matches the cell, where the 1-bit
+objective demands per-pixel mask agreement and so favors harsh
+ink-on-ground pairings. The glyph matcher now **beats the quadrant
+dither on mandrill and fox at both palettes**, and closes the wheel
+gap to 1.1–1.2×. Visual verification: the gain is real texture/color
+selection, not metric-gaming — softer pairings, smoother fur, no
+smearing. Each `_displaymatch` composite shows reference /
+quadrant-dither / byte-matched / display-matched:
+[mandrill-ansi256](comparisons/mandrill-ansi256_displaymatch.png),
+[mandrill-ansi16](comparisons/mandrill-ansi16_displaymatch.png),
+[fox-ansi16](comparisons/fox-ansi16_displaymatch.png) (the 16-color
+win), [fox-ansi256](comparisons/fox-ansi256_displaymatch.png),
+[wheel-ansi16](comparisons/wheel-ansi16_displaymatch.png) and
+[wheel-ansi256](comparisons/wheel-ansi256_displaymatch.png) (the
+dither's remaining wins, kept for honesty).
+
+### Which color metric — matching vs judging
+
+Two metrics are in play and they were never the same: every renderer in
+the harness uses the `Renderer` default, **Redmean**, for matching and
+search distances (nothing ever set `WithColorMethod`), while the
+scoring referee (`BlurredLabError`) judges in **LAB ΔE**. Every
+standings number above is Redmean-matched unless labeled. Aligning the
+objective with the referee is worth 11–23% to both converters
+(mandrill, display-aware matcher with diffusion, blurred ΔE σ = 1
+cell):
+
+| arm / matching metric | RGB | Redmean | LAB |
+|---|---|---|---|
+| quadrant dither, ansi16 | — | 12.26 | 10.48 |
+| display matcher, ansi16 | 9.42 | 9.65 | **8.27** |
+| quadrant dither, ansi256 | — | 4.49 | 3.46 |
+| display matcher, ansi256 | 3.87 | 3.85 | **3.44** |
+
+Aligned LAB-vs-LAB, the display-aware matcher still beats the dither at
+both palettes (8.27 vs 10.48; 3.44 vs 3.46 — a near-tie at 256, where
+LAB matching lifts the dither most) — the headline survives the
+fairness correction. Naive RGB and Redmean are nearly tied for the
+matcher on this image. The cost: `LABMethod.Distance` converts both
+colors per call, so LAB matching at 256 colors runs roughly an order
+of magnitude slower than Redmean — the ansi256 LAB dither cell takes
+~20 minutes at width-first grids, which no test can hold; it runs
+through `cmd/quality` (`-methods lab -arms dither`). A `toLab`
+memoization would make LAB matching practical; it is a perf item, not
+a design limit.
 
 A dither-vs-matcher comparison conflates two variables: the cell
 REPRESENTATION (2×2 quadrants vs 8×8 glyphs) and ERROR DIFFUSION (the
@@ -246,59 +383,63 @@ dither has it, the matcher does not yet). The harness therefore carries
 a diffusion-ablated control arm (`quadrant-no-diff`: the same per-block
 search as the dither, diffusion off), so the two factors can be read
 separately. Standings (blurred ΔE, σ = 1 cell, `TestConverterArms`,
-corrected nearest-color tables):
+corrected nearest-color tables, display-geometry chain):
 
 ansi16:
 
 | image | 2×2 dither | 2×2 no-diffusion | 8×8 matcher | 8×8 matcher+diffusion | 8×8 flat blocks |
 |---|---|---|---|---|---|
-| gray-gradient | 2.52 | 6.58 | 6.58 | **2.37** | 6.58 |
-| fleshtone | 13.40 | 29.31 | 29.34 | 16.80 | 29.18 |
-| color-ramp | 9.65 | 23.69 | 23.69 | 13.37 | 23.61 |
-| fox | 7.69 | 15.32 | 17.08 | 10.82 | 17.63 |
-| mandrill | 11.56 | 14.92 | 15.82 | 12.77 | 17.22 |
-| wheel | 9.29 | 23.41 | 24.49 | 13.68 | 24.38 |
+| gray-gradient | 2.53 | 6.67 | 6.67 | **2.33** | 6.67 |
+| fleshtone | 13.72 | 29.43 | 29.48 | 16.55 | 29.33 |
+| color-ramp | 10.77 | 25.15 | 25.24 | 13.71 | 25.05 |
+| fox | 9.30 | 15.95 | 17.87 | 11.73 | 19.07 |
+| mandrill | 12.26 | 15.69 | 16.26 | 13.24 | 17.95 |
+| wheel | 9.87 | 23.19 | 24.74 | 13.63 | 24.89 |
 
 ansi256:
 
 | image | 2×2 dither | 2×2 no-diffusion | 8×8 matcher | 8×8 matcher+diffusion | 8×8 flat blocks |
 |---|---|---|---|---|---|
-| gray-gradient | 0.29 | 0.36 | 0.36 | 0.62 | 0.38 |
-| fleshtone | 3.97 | 11.00 | 10.82 | **4.12** | 11.06 |
-| color-ramp | 2.70 | 7.81 | 7.77 | **3.78** | 8.09 |
-| fox | 3.81 | 7.93 | 9.18 | **4.76** | 9.77 |
-| mandrill | 3.52 | 5.64 | 5.57 | **3.79** | 7.17 |
-| wheel | 2.40 | 10.54 | 11.39 | 5.23 | 11.47 |
+| gray-gradient | 0.51 | 0.46 | **0.45** | 0.63 | 0.55 |
+| fleshtone | 4.08 | 11.27 | 11.27 | **4.10** | 11.18 |
+| color-ramp | 3.24 | 8.76 | 8.85 | 4.76 | 8.82 |
+| fox | 5.17 | 8.51 | 9.71 | 5.64 | 10.92 |
+| mandrill | 4.49 | 6.25 | 6.30 | **4.45** | 7.97 |
+| wheel | 3.11 | 10.38 | 11.42 | 5.61 | 11.54 |
 
 Reading the factors apart:
 
 - **Representation (2×2 no-diffusion vs 8×8 matcher, apples to
   apples):** near parity. At 16 colors they tie on every synthetic ramp
-  and 2×2 leads by 5–11% on photos. At 256 colors the matcher *ties or
-  wins* on four of six images — consistent with the original lab's
-  conclusion that 256 colors close the representation gap. (An earlier
-  draft claimed the opposite by comparing the diffused dither against
-  the undiffused matcher.)
-- **Diffusion:** the dominant factor, worth 2–4× on this metric, and —
-  now measured on both sides — a *mechanism*, not a property of either
-  representation. `GlyphMatcher.Diffusion` diffuses each cell's
-  per-pixel residuals (against the rendered glyph colors, via the same
-  `distributeError` weights as the quadrant dither) into undecided
-  neighboring cells.
-- **With diffusion on both sides the modes are nearly equivalent.** The
-  diffused matcher lands within 4–9% of the full quadrant dither at 256
-  colors on photos and ramps (mandrill 3.79 vs 3.52, fleshtone 4.12 vs
-  3.97), and *beats* the dither outright on the 16-color gray gradient
-  (2.37 vs 2.52 — finer spatial masks pay off when the palette is
-  coarse). The remaining real gap is wheel-style flat saturated regions
-  (5.23 vs 2.40), where 2 px cells simply track hue boundaries better
-  than 8 px cells.
+  and 2×2 leads by 4–12% on photos. At 256 colors they tie on four of
+  six images (gray, fleshtone, color-ramp and mandrill all within 1%)
+  — consistent with the original lab's conclusion that 256 colors
+  close the representation gap; fox and wheel are the exceptions. (An
+  earlier draft claimed the opposite by comparing the diffused dither
+  against the undiffused matcher.)
+- **Diffusion:** the dominant factor, worth 1.8–2.9× on ramps and
+  flat-color content and 19–51% on photos, and — now measured on both
+  sides — a *mechanism*, not a property of either representation.
+  `GlyphMatcher.Diffusion` diffuses each cell's per-pixel residuals
+  (against the rendered glyph colors, via the same `distributeError`
+  weights as the quadrant dither) into undecided neighboring cells.
+- **With diffusion on both sides, photos are nearly equivalent.** The
+  diffused matcher *beats* the full quadrant dither outright on
+  mandrill at 256 colors (4.45 vs 4.49) and on the 16-color gray
+  gradient (2.33 vs 2.53 — finer spatial masks pay off when the
+  palette is coarse), and lands within 1% on fleshtone (4.10 vs 4.08).
+  The real gaps that remain are fox-256 (5.64 vs 5.17) and the
+  saturated flats — color-ramp (4.76 vs 3.24) and wheel (5.61 vs 3.11)
+  — where 2 px cells simply track hue boundaries better than 8 px
+  cells.
 - **One measured regression, kept deliberately visible:** on the
-  ansi256 gray gradient, diffusion *worsens* the matcher (0.36 → 0.62).
-  The gradient is nearly exactly representable at 256 colors, so the
-  residuals are sub-quantum and diffusing them just adds noise — the
-  classic "don't dither what you can represent" effect. The harness
-  assertion excludes this case explicitly.
+  ansi256 gray gradient, diffusion *worsens* the matcher (0.45 → 0.63)
+  — and under the display chain the quadrant dither now shows the same
+  effect against its own ablation (0.51 vs 0.46). The gradient is
+  nearly exactly representable at 256 colors, so the residuals are
+  sub-quantum and diffusing them just adds noise — the classic "don't
+  dither what you can represent" effect. The harness assertion
+  excludes this case explicitly.
 
 ## Where the matching should go next
 
