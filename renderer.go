@@ -54,9 +54,9 @@ type Renderer struct {
 	lookupMisses int
 
 	// Stats (private)
-	beginInitTime       time.Time
-	bestBlockTime       time.Duration
-	usingPrecomputed    bool // true if using precomputed tables, false if KD-tree fallback
+	beginInitTime    time.Time
+	bestBlockTime    time.Duration
+	usingPrecomputed bool // true if using precomputed tables, false if KD-tree fallback
 }
 
 // RendererOption is a functional option for configuring a Renderer.

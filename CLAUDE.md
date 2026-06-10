@@ -23,6 +23,10 @@ go test ./...
 
 # Run tests with verbose output
 go test -v ./...
+
+# The tree must be gofmt-clean; this must print nothing.
+# Run it before committing.
+gofmt -l .
 ```
 
 ## Dependencies

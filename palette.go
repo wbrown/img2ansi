@@ -322,7 +322,6 @@ func (cct CompactComputedTables) Restore() ComputedTables {
 	}
 }
 
-
 // Old global-based palette loading functions (LoadPalette, LoadPaletteBinary,
 // LoadPaletteJSON, ComputeDistinctColors, LookupClosestColor, GetPaletteColors,
 // GetPaletteSize, GetANSICode) removed in v1.0.0.

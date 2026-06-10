@@ -157,6 +157,7 @@ func (r *Renderer) BrownDitherForBlocks(
 // For each of the 4 pixels, find the closest palette color. This uses either:
 //   - Precomputed tables (O(1) lookup) for built-in ColorDistanceMethods
 //   - KD-tree nearest neighbor search for custom methods
+//
 // This gives us 4 "anchor" colors - the per-pixel optima.
 //
 // Stage 2: Block Search

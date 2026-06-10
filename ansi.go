@@ -11,7 +11,6 @@ type AnsiEntry struct {
 }
 type AnsiData []AnsiEntry
 
-
 // CompressANSI compresses an ANSI image by combining adjacent blocks with
 // the same foreground and background colors. The function takes an ANSI
 // image as a string and returns the more efficient ANSI image as a string.

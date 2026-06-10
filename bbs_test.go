@@ -72,11 +72,11 @@ func TestCompressBBSProducesValidOutput(t *testing.T) {
 	)
 
 	// Use actual ANSI 16 palette colors (from ansi16.json)
-	black := RGB{0x00, 0x00, 0x00}   // code 30/40
-	red := RGB{0xAA, 0x00, 0x00}     // code 31/41
-	green := RGB{0x00, 0xAA, 0x00}   // code 32/42
-	blue := RGB{0x00, 0x00, 0xAA}    // code 34/44
-	yellow := RGB{0xAA, 0x55, 0x00}  // code 33/43
+	black := RGB{0x00, 0x00, 0x00}     // code 30/40
+	red := RGB{0xAA, 0x00, 0x00}       // code 31/41
+	green := RGB{0x00, 0xAA, 0x00}     // code 32/42
+	blue := RGB{0x00, 0x00, 0xAA}      // code 34/44
+	yellow := RGB{0xAA, 0x55, 0x00}    // code 33/43
 	brightRed := RGB{0xFF, 0x55, 0x55} // code 91/101
 
 	// Create a small test block grid (2x2 blocks)
