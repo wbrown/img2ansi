@@ -277,6 +277,58 @@ func TestSynthesizeBlockGlyphs(t *testing.T) {
 	}
 }
 
+// TestWithBlocksFromFont verifies the dither alphabet derivation:
+// Blocks ∩ genuine font glyphs, with synthesized stand-ins excluded.
+func TestWithBlocksFromFont(t *testing.T) {
+	// font8x8 genuinely provides all 16 quadrant patterns.
+	f8, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRenderer(WithBlocksFromFont(f8))
+	if len(r.blocks) != 16 {
+		t.Errorf("font8x8 alphabet should be all 16 blocks, got %d", len(r.blocks))
+	}
+
+	// PxPlus IBM BIOS provides only the 6 CP437 blocks. The 10 quadrant
+	// glyphs synthesized at load time must NOT expand the alphabet:
+	// they exist so previews render, not to claim CP437 shows quadrants.
+	ibm, err := LoadEmbeddedFont("pxplus_ibm_bios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = NewRenderer(WithBlocksFromFont(ibm))
+	if len(r.blocks) != 6 {
+		t.Errorf("IBM BIOS alphabet should be the 6 CP437 blocks, got %d", len(r.blocks))
+	}
+
+	// The derived CP437 alphabet is exactly BBSBlocks — BBS mode is the
+	// hand-written instance of this derivation.
+	derived := make(map[rune]bool)
+	for _, b := range r.blocks {
+		derived[b.Rune] = true
+	}
+	for _, b := range BBSBlocks {
+		if !derived[b.Rune] {
+			t.Errorf("derived CP437 alphabet missing BBS block %q", b.Rune)
+		}
+		delete(derived, b.Rune)
+	}
+	for r := range derived {
+		t.Errorf("derived CP437 alphabet has %q beyond BBSBlocks", r)
+	}
+
+	// A font with no quadrant patterns at all leaves the alphabet alone.
+	empty := &FontBitmaps{
+		glyphs:   map[rune]GlyphBitmap{'A': 1},
+		fallback: make(map[rune]GlyphBitmap),
+	}
+	r = NewRenderer(WithBlocksFromFont(empty))
+	if len(r.blocks) != 16 {
+		t.Errorf("empty intersection should leave default Blocks, got %d", len(r.blocks))
+	}
+}
+
 func popcount(g GlyphBitmap) int {
 	count := 0
 	for i := 0; i < 64; i++ {

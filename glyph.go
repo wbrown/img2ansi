@@ -232,6 +232,16 @@ func (fb *FontBitmaps) GetGlyph(r rune) (GlyphBitmap, bool) {
 	return 0, false
 }
 
+// GenuineGlyph returns the bitmap for a character only if the font
+// itself provides it, ignoring synthesized stand-ins. Code that derives
+// a search alphabet from a font must use this, never GetGlyph:
+// synthesized glyphs exist so previews can render, not to expand what a
+// target medium is claimed to support.
+func (fb *FontBitmaps) GenuineGlyph(r rune) (GlyphBitmap, bool) {
+	bitmap, exists := fb.glyphs[r]
+	return bitmap, exists
+}
+
 // Runes returns all characters available in the primary font.
 func (fb *FontBitmaps) Runes() []rune {
 	runes := make([]rune, 0, len(fb.glyphs))

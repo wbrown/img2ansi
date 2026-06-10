@@ -334,6 +334,60 @@ func TestDiffusionQualityGradients(t *testing.T) {
 	}
 }
 
+// TestBlockAlphabetQuality measures what restricting the pattern
+// alphabet costs: the full 16-block set against the 6 CP437 blocks,
+// with an identical palette so only the alphabet differs. The full
+// alphabet searches a superset, so it must never be meaningfully worse.
+// Photos in images/ are included in the log when present.
+func TestBlockAlphabetQuality(t *testing.T) {
+	full := NewRenderer(WithPalette("ansi16"))
+	cp437 := NewRenderer(WithBBSMode(), WithPalette("ansi16"))
+
+	score := func(r *Renderer, img *imageutil.RGBAImage, edges *imageutil.GrayImage, ref *imageutil.RGBAImage) float64 {
+		blocks := r.BrownDitherForBlocks(img.Clone(), edges)
+		return blurredLabError(renderBlocksToImage(blocks), ref, 2)
+	}
+
+	measure := func(name string, img *imageutil.RGBAImage, edges *imageutil.GrayImage, assert bool) {
+		ref := img.Clone()
+		f := score(full, img, edges, ref)
+		c := score(cp437, img, edges, ref)
+		t.Logf("%-14s blurredΔE σ2: 16-block=%6.2f  6-block=%6.2f  (restriction cost %+.0f%%)",
+			name, f, c, (c/f-1)*100)
+		if assert && f > c*1.10 {
+			t.Errorf("%s: full alphabet (%.2f) should not be worse than restricted (%.2f)",
+				name, f, c)
+		}
+	}
+
+	patterns := []struct {
+		name string
+		img  *imageutil.RGBAImage
+	}{
+		{"gray-gradient", makeGradient(128, 32)},
+		{"fleshtone", makeFleshtone(128, 32)},
+		{"color-ramp", makeColorRamp(128, 64)},
+	}
+	for _, p := range patterns {
+		edges := imageutil.NewGrayImage(p.img.Width(), p.img.Height())
+		measure(p.name, p.img, edges, true)
+	}
+
+	photos, _ := filepath.Glob("images/*.png")
+	for _, path := range photos {
+		img, err := imageutil.LoadImage(path)
+		if err != nil {
+			continue
+		}
+		width := 100
+		aspect := float64(img.Width()) / float64(img.Height())
+		height := int(float64(width) / aspect / 2.0)
+		resized, edges := imageutil.PrepareForANSI(img, width, height)
+		name := filepath.Base(path)
+		measure(name[:len(name)-len(".png")], resized, edges, false)
+	}
+}
+
 func TestDiffusionQualityPhotos(t *testing.T) {
 	// testdata/mandrill.tiff is committed; images/*.png is an optional
 	// local corpus for broader measurement runs (kept out of the repo).

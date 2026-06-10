@@ -163,6 +163,27 @@ func WithICEColors() RendererOption {
 	}
 }
 
+// WithBlocksFromFont restricts the dither's pattern alphabet to the
+// quadrant blocks the font genuinely provides (Blocks ∩ font). This is
+// the general form of WithBBSMode: derived from a CP437 font it yields
+// exactly the BBSBlocks set. Synthesized glyphs do not count — the
+// search space must match what the target medium can display, not what
+// a preview renderer can draw. If the font provides none of the 16
+// patterns, the alphabet is left unchanged.
+func WithBlocksFromFont(fb *FontBitmaps) RendererOption {
+	return func(r *Renderer) {
+		var derived []blockDef
+		for _, b := range Blocks {
+			if _, ok := fb.GenuineGlyph(b.Rune); ok {
+				derived = append(derived, b)
+			}
+		}
+		if len(derived) > 0 {
+			r.blocks = derived
+		}
+	}
+}
+
 // LoadPalette loads a color palette from the given path.
 // If the same palette with the same color method is already loaded,
 // this is a no-op (smart caching). The lookupTable cache is preserved

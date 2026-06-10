@@ -29,6 +29,40 @@ func TestBlocksIndexEncodesQuadrants(t *testing.T) {
 	}
 }
 
+// TestBBSBlocksAreCP437Intersection pins BBSBlocks as exactly the
+// quadrant patterns CP437 can express (Blocks ∩ cp437ToUnicode): the
+// BBS alphabet is one instance of the general rule that the dither's
+// search space must match what the target medium displays.
+func TestBBSBlocksAreCP437Intersection(t *testing.T) {
+	inCP437 := make(map[rune]bool)
+	for _, r := range cp437ToUnicode {
+		inCP437[r] = true
+	}
+
+	want := make(map[rune]bool)
+	for _, b := range Blocks {
+		if inCP437[b.Rune] {
+			want[b.Rune] = true
+		}
+	}
+
+	got := make(map[rune]bool)
+	for _, b := range BBSBlocks {
+		got[b.Rune] = true
+	}
+
+	for r := range want {
+		if !got[r] {
+			t.Errorf("CP437 can express %q but BBSBlocks lacks it", r)
+		}
+	}
+	for r := range got {
+		if !want[r] {
+			t.Errorf("BBSBlocks has %q but CP437 cannot express it", r)
+		}
+	}
+}
+
 // TestRuneQuadrantsMatchesBlocks verifies the diffusion lookup map agrees
 // with the Blocks table for every block character.
 func TestRuneQuadrantsMatchesBlocks(t *testing.T) {

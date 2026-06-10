@@ -378,7 +378,12 @@ blocks) now lives on `main`:
 - `docs/glyph-research/GLYPH_MATCHING_EXPERIMENTS.md`: The detailed
   experiment log from the original `font-analysis` research branch.
 - `glyph.go` / `cp437.go`: `GlyphBitmap` infrastructure, `.glyphs` and
-  ROM font loading, font-based rendering of `BlockRune` output.
+  ROM font loading, font-based rendering of `BlockRune` output, and
+  font-derived dither alphabets (`WithBlocksFromFont` = Blocks ∩ font;
+  the general form of `WithBBSMode`, whose `BBSBlocks` is exactly the
+  CP437 derivation). Alphabet derivation uses `GenuineGlyph`, never
+  `GetGlyph` — synthesized glyphs render previews, they do not expand a
+  target's alphabet.
 - `cmd/compute_glyphs/`: Glyph extraction tool with self-calibrating
   TTF rasterization (keeps the freetype dependency out of the library).
 

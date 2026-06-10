@@ -123,6 +123,45 @@ and its row format is bit-compatible with `GlyphBitmap`. The IBM BIOS
 font remains the authentic-CP437-aesthetic option. ROM dumps of other
 8x8 fonts load directly via `LoadROMFont`.
 
+## Alphabet derivation: search space = medium
+
+The recurring rule behind this session's fixes (BBS bright colors,
+diffusion targets, .notdef boxes): **the space the search optimizes
+over must equal the space the target medium can display.** For pattern
+alphabets this is now first-class:
+
+```go
+font, _ := img2ansi.LoadEmbeddedFont("pxplus_ibm_bios")
+r := img2ansi.NewRenderer(
+    img2ansi.WithBlocksFromFont(font),   // dither with Blocks ∩ font
+    img2ansi.WithPalette("ansi16"),
+)
+```
+
+- The derivation uses `GenuineGlyph`, never `GetGlyph`: synthesized
+  glyphs exist so previews render; they must never expand what a target
+  is claimed to support.
+- `WithBBSMode`'s hand-written `BBSBlocks` list is exactly what this
+  derivation produces for a CP437 font — pinned by
+  `TestBBSBlocksAreCP437Intersection` and `TestWithBlocksFromFont`.
+- The future glyph matcher inherits the rule structurally: its candidate
+  set is the font's genuine glyph map.
+
+Measured cost of the CP437 restriction (16 blocks → 6, identical ansi16
+palette, blurred ΔE σ=2, `TestBlockAlphabetQuality`):
+
+| image | 16-block | 6-block | restriction cost |
+|---|---|---|---|
+| gray-gradient | 2.54 | 3.42 | +35% |
+| fleshtone | 13.39 | 13.58 | +1% |
+| color-ramp | 9.66 | 10.00 | +4% |
+| mandrill | 11.43 | 11.53 | +1% |
+
+Error diffusion absorbs most of the loss on textured content; smooth
+grayscale ramps are where the quadrant patterns genuinely earn their
+keep. Practically: BBS mode's pattern restriction is nearly free for
+photos.
+
 ## Findings carried over from the experiment log
 
 From [GLYPH_MATCHING_EXPERIMENTS.md](GLYPH_MATCHING_EXPERIMENTS.md) and
