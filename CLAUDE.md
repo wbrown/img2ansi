@@ -16,9 +16,9 @@ gofmt -l .         # must print NOTHING
 go vet .
 ```
 
-- `cmd/ansify`, `cmd/compute_tables`, and `cmd/compute_glyphs` are **separate
-  modules**: root `go test ./...` does not touch them. When you change them,
-  build them (`cd cmd/<tool> && go build .`).
+- `cmd/ansify`, `cmd/compute_tables`, `cmd/compute_glyphs`, and `cmd/quality`
+  are **separate modules**: root `go test ./...` does not touch them. When you
+  change them, build them (`cd cmd/<tool> && go build .`).
 - The main-package suite is slow (90–300s: palette table computation, the
   quality harness). Use generous **tool-call timeouts** (600000ms) and wait.
   **Do NOT add `-timeout` to `go test` commands, or use `-timeout 0`.** Use the
@@ -128,7 +128,7 @@ it. The recurring instances:
   a comment, prose, a commit message — you have not done the naming, and that
   code needs a second look. The word surfacing IS the violation, wherever it
   surfaces. Acceptable names describe action or role: `nearestFgColor`,
-  `calibrationProbes`, `measureConverterArms`, a fixture builder, a constructor.
+  `calibrationProbes`, `MeasureConverterArms`, a fixture builder, a constructor.
   (`t.Helper()` is Go's API name, not yours; calling it is fine.)
 
 - **Never destroy state you cannot get back.** `git clean` and `git stash` are
@@ -283,6 +283,10 @@ go build ./cmd/compute_tables
 
 # Build compute_glyphs utility (font glyph extraction for research)
 cd cmd/compute_glyphs && go build .
+
+# Build the quality harness runner (research measurements that exceed
+# the test budget: method sweeps, alphabet ladders, comparison composites)
+cd cmd/quality && go build .
 
 # Run all tests
 go test ./...
@@ -634,8 +638,12 @@ edges := imageutil.DetectEdges(resized)                  // Edge detection after
 - `palette.go`: Color palette types, serialization, and table computation
 - `rgb.go`: RGB/LAB color types and `ColorDistanceMethod` interface
 - `approximatecache.go`: Block caching system for performance
+- `harness.go`: Converter-quality measurement harness (blurred-LAB
+  metric, display-geometry chain, `MeasureConverterArms`, CRT model) —
+  shared by the tests and `cmd/quality`
 - `cmd/ansify/ansify.go`: CLI interface and parameter handling
 - `cmd/compute_tables/`: Regenerates embedded `.palette` binary files
+- `cmd/quality/`: Standalone harness runner for over-budget experiments
 - `MIGRATION.md`: Guide for migrating from global API to Renderer API
 
 ## Active Research: Font-Agnostic Rendering
@@ -679,8 +687,10 @@ Key findings so far:
   residuals diffuse as noise. **Display-aware matching**
   (`SetBeamSigma`: score candidates as their CRT'd appearance, born
   from the phosphor-glow insight) improves the matcher a further
-  18–36% and puts it ahead of the quadrant dither on the mandrill at
-  both palettes. See the standings tables in
+  10–30% and puts it ahead of the quadrant dither on the mandrill and
+  the fox at both palettes. All standings are measured under the
+  display-geometry chain (80×25 screen, 1:2.4 cells, 8×8 glyphs
+  scan-doubled to 8×16). See the standings tables in
   `docs/glyph-research/README.md`.
 - Simple heuristics (DominantColorSelector) are near-optimal at 256
   colors — validated by true exhaustive search. The constraint is the
@@ -824,21 +834,34 @@ output back to pixels and scores it against the pre-dither reference:
   committed reference corpus — see `images/README.md`); set
   `DIFFUSION_PNGS=<dir>` to dump comparison renders.
 
-The cross-converter harness (`measureConverterArms`,
-`TestConverterArms`) generalizes this to any `BlockConverter`: each
-arm's input is prepared at its native source resolution for the same
-cell grid, outputs are rendered at a common 8 px/cell (quadrant
-geometry or font glyphs), and blur sigma is expressed in cell widths so
-scores are comparable across converters. This is how glyph matchers get
-scored against the quadrant dither.
+The cross-converter harness (`MeasureConverterArms` in `harness.go`,
+exercised by `TestConverterArms`) generalizes this to any
+`BlockConverter`: each arm's input is prepared at its native source
+resolution for the same cell grid, every arm's output renders through
+the display chain — 8×8 font glyphs (the quadrant dither's runes
+included; never idealized rectangles), scan-doubled to 8×16, stretched
+×1.2 to the 1:2.4 display cell aspect on an 80×25 target screen — and
+blur sigma is expressed in cell widths so scores are comparable across
+converters. This is how glyph matchers get scored against the quadrant
+dither.
+
+**Experiments that exceed the test budget run through `cmd/quality`,
+never through ad-hoc copies of harness code.** The tool drives the same
+exported harness functions the tests use (method sweeps, alphabet
+ladders, CRT-scored arms, comparison composites), so its numbers and
+the tests' numbers are the same numbers. The cell that motivates it:
+a LAB-matched ansi256 dither run takes ~12 minutes, which no test can
+hold. Writing a one-off runner with a pasted copy of the scoring
+pipeline is a constitution violation — extend `cmd/quality` or
+`harness.go` instead.
 
 **Two color metrics are in play and they are not the same.** Every
 harness renderer is built without `WithColorMethod`, so all MATCHING
 and search distances use the `Renderer` default, **Redmean** — every
 standings number in the research docs was matched with Redmean unless
-explicitly labeled. The SCORING referee (`blurredLabError`) judges in
+explicitly labeled. The SCORING referee (`BlurredLabError`) judges in
 **LAB ΔE**. Matching in LAB to align objective with referee is worth a
-further ~20% on the matcher (see the color-metric table in
+further 9–17% (see the color-metric table in
 `docs/glyph-research/README.md`); the trade-off is that LAB's
 `Distance` converts both colors per call, making LAB matching at 256
 colors roughly an order of magnitude slower than Redmean (a
