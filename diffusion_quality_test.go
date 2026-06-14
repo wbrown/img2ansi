@@ -362,10 +362,11 @@ func TestConverterArms(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Penalty comparison arms: isolate gutter vs readable vs both,
-			// byte-matched + diffusion, at a high weight to read the
-			// ceiling. The readable/gutter % columns quantify what the
-			// blurred-LAB metric cannot see — delta-E barely moves across
-			// all three while the composition changes completely.
+			// byte-matched + diffusion, at the measured knees — gutter
+			// saturates the seam fraction to the edge-floor by ~5k, readable
+			// zeroes the letter fraction by ~1k. The readable/gutter %
+			// columns quantify what blurred-LAB cannot see: delta-E barely
+			// moves while the composition changes completely.
 			penaltyArm := func(gutter, readable float64) BlockConverter {
 				m := NewGlyphMatcher(r, font)
 				m.Diffusion = true
@@ -380,9 +381,9 @@ func TestConverterArms(t *testing.T) {
 				FontArm("glyph-matcher-exhaust", exhaustiveMatcher, font),
 				FontArm("glyph-matcher-diff", diffusedMatcher, font),
 				FontArm("glyph-matcher-display", displayMatcher, font),
-				FontArm("glyph-gutter", penaltyArm(1e5, 0), font),
-				FontArm("glyph-readable", penaltyArm(0, 1e5), font),
-				FontArm("glyph-both", penaltyArm(1e5, 1e5), font),
+				FontArm("glyph-gutter", penaltyArm(5000, 0), font),
+				FontArm("glyph-readable", penaltyArm(0, 1000), font),
+				FontArm("glyph-both", penaltyArm(5000, 1000), font),
 				FontArm("mean-color-block", meanColorConverter{r}, font),
 			}
 
