@@ -220,6 +220,7 @@ type ConverterArm struct {
 	name   string
 	conv   BlockConverter
 	render func([][]BlockRune) *imageutil.RGBAImage
+	font   *FontBitmaps
 }
 
 // FontArm renders a converter's output through font glyph bitmaps —
@@ -234,6 +235,7 @@ func FontArm(name string, conv BlockConverter, font *FontBitmaps) ConverterArm {
 			return imageutil.RGBAImageFromImage(
 				font.RenderBlocks(blocks, scorePxPerCell/GlyphWidth))
 		},
+		font: font,
 	}
 }
 
@@ -257,13 +259,41 @@ func PhotoSource(img *imageutil.RGBAImage) ImageSource {
 
 // ArmScore is one arm's result from MeasureConverterArms: the blurred
 // delta-E at half-cell and one-cell sigma (one-cell is the headline
-// number in the research log) and the displayed render, so callers can
-// re-score it under other display models or compose comparisons.
+// number in the research log), the glyph-composition fractions (the
+// structure-aware companion to the tone metric), and the displayed
+// render, so callers can re-score it under other display models or
+// compose comparisons.
 type ArmScore struct {
-	Name     string
-	HalfCell float64
-	OneCell  float64
-	Rendered *imageutil.RGBAImage
+	Name         string
+	HalfCell     float64
+	OneCell      float64
+	ReadableFrac float64
+	GutterFrac   float64
+	Rendered     *imageutil.RGBAImage
+}
+
+// glyphCompositionFraction reports the fraction of a converter's visible
+// cells (fg != bg, so a glyph actually shows) for which pred holds — a
+// structure-aware companion to the blurred-LAB metric. The readable-text
+// and edge-seam artifacts the matcher's penalties target are invisible to
+// a tone metric but surface here as a count.
+func glyphCompositionFraction(blocks [][]BlockRune, pred func(BlockRune) bool) float64 {
+	var visible, hits int
+	for _, row := range blocks {
+		for _, c := range row {
+			if c.FG == c.BG {
+				continue // flat cell: no glyph is visible
+			}
+			visible++
+			if pred(c) {
+				hits++
+			}
+		}
+	}
+	if visible == 0 {
+		return 0
+	}
+	return float64(hits) / float64(visible)
 }
 
 // MeasureConverterArms runs each converter over the same cell grid and
@@ -299,14 +329,23 @@ func MeasureConverterArms(
 
 		halfCell := BlurredLabError(rendered, reference, 0.5*scorePxPerCell)
 		oneCell := BlurredLabError(rendered, reference, 1.0*scorePxPerCell)
-		scores = append(scores, ArmScore{
-			Name:     arm.name,
-			HalfCell: halfCell,
-			OneCell:  oneCell,
-			Rendered: rendered,
+		readableFrac := glyphCompositionFraction(blocks, func(c BlockRune) bool {
+			return isReadableRune(c.Rune)
 		})
-		logf("%-14s %-18s blurredΔE σ=0.5cell %6.2f  σ=1cell %6.2f",
-			name, arm.name, halfCell, oneCell)
+		gutterFrac := glyphCompositionFraction(blocks, func(c BlockRune) bool {
+			g, _ := arm.font.GetGlyph(c.Rune)
+			return glyphGutterScore(uint64(g)) > 0
+		})
+		scores = append(scores, ArmScore{
+			Name:         arm.name,
+			HalfCell:     halfCell,
+			OneCell:      oneCell,
+			ReadableFrac: readableFrac,
+			GutterFrac:   gutterFrac,
+			Rendered:     rendered,
+		})
+		logf("%-14s %-20s ΔE σ.5=%6.2f σ1=%6.2f  readable=%4.1f%% gutter=%4.1f%%",
+			name, arm.name, halfCell, oneCell, 100*readableFrac, 100*gutterFrac)
 
 		labels = append(labels, fmt.Sprintf("%s dE=%.2f", arm.name, oneCell))
 		panels = append(panels, rendered)
