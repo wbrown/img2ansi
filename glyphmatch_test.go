@@ -395,3 +395,97 @@ func TestGlyphMatcherDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestGlyphMatcherAnchorsMatchExhaustive is the oracle that pins the
+// measured 16-color finding: the dominant-anchor candidate heuristic
+// reaches the same per-cell optimum as enumerating the entire palette.
+// ExhaustiveColors is the exhaustive referee, the default anchor search
+// the clever structure — the same shape as
+// TestNearestNeighborMatchesLinearScan validating the KD-tree against a
+// linear scan. Per-cell error is compared in the matcher's own (Redmean)
+// objective; equality on every cell is the evidence that the 8x8
+// matcher's 16-color limitation is the medium (two colors per 64-pixel
+// cell), not the color search. If this ever reddens, full enumeration
+// found a pair the anchors missed and the premise has changed —
+// investigate it, do not relax the bound.
+func TestGlyphMatcherAnchorsMatchExhaustive(t *testing.T) {
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRenderer(WithPalette("ansi16"))
+
+	cases := []struct {
+		name string
+		img  *imageutil.RGBAImage
+	}{
+		{"color-ramp", makeColorRamp(64, 64)},
+		{"fleshtone", makeFleshtone(64, 64)},
+		{"gray-gradient", makeGradient(64, 64)},
+	}
+
+	for _, tc := range cases {
+		anchorMatcher := NewGlyphMatcher(r, font)
+		exhaustive := NewGlyphMatcher(r, font)
+		exhaustive.ExhaustiveColors = true
+
+		edges := imageutil.NewGrayImage(tc.img.Width(), tc.img.Height())
+		aOut := anchorMatcher.Convert(tc.img.Clone(), edges)
+		eOut := exhaustive.Convert(tc.img.Clone(), edges)
+
+		k := GlyphWidth
+		var worst float64
+		suboptimal, cells := 0, 0
+		for cy := range aOut {
+			for cx := range aOut[cy] {
+				var cell [cellPixels]RGB
+				for i := 0; i < cellPixels; i++ {
+					p := tc.img.GetRGB(cx*k+i%k, cy*k+i/k)
+					cell[i] = RGB{p.R, p.G, p.B}
+				}
+				aErr := cellRenderError(t, r, font, aOut[cy][cx], &cell)
+				eErr := cellRenderError(t, r, font, eOut[cy][cx], &cell)
+				cells++
+				// exhaustive searches a superset, so eErr is the true
+				// minimum; anchors can only tie or lose. The finding is
+				// that they tie everywhere.
+				if aErr > eErr+1e-6 {
+					suboptimal++
+					if d := aErr - eErr; d > worst {
+						worst = d
+					}
+				}
+			}
+		}
+		if suboptimal > 0 {
+			t.Errorf("%s/ansi16: anchors suboptimal on %d/%d cells (worst excess Δ=%.4f) — "+
+				"full enumeration beats the heuristic, the small-palette gap is the search",
+				tc.name, suboptimal, cells, worst)
+		} else {
+			t.Logf("%s/ansi16: anchors reach the exhaustive optimum on all %d cells", tc.name, cells)
+		}
+	}
+}
+
+// cellRenderError is the matcher's own objective for one cell: the sum
+// over the 64 pixels of the color distance (in the renderer's method) to
+// the color each pixel renders as — fg where the chosen glyph's mask is
+// set, bg elsewhere. It recomputes naively what matchCell derives via the
+// ideal-mask formula, so it doubles as an independent check on that
+// formula.
+func cellRenderError(t *testing.T, r *Renderer, font *FontBitmaps, br BlockRune, cell *[cellPixels]RGB) float64 {
+	t.Helper()
+	g, ok := font.GenuineGlyph(br.Rune)
+	if !ok {
+		t.Fatalf("matcher emitted non-genuine rune %q", br.Rune)
+	}
+	var sum float64
+	for i := 0; i < cellPixels; i++ {
+		c := br.BG
+		if g.Bit(i%GlyphWidth, i/GlyphWidth) {
+			c = br.FG
+		}
+		sum += r.ColorMethod.Distance(cell[i], c)
+	}
+	return sum
+}

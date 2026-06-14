@@ -27,13 +27,18 @@ import (
 // once a candidate exceeds the best total so far. This makes truly
 // exhaustive glyph search cheap instead of approximated.
 //
-// Candidate colors are the cell's anchor palette colors: the nearest
-// palette color of each pixel, ranked by frequency (the dominant-color
-// heuristic validated by the original research), plus the nearest color
-// to the cell mean — which keeps the flat block inside the search space
-// and matters on smooth gradients under fine palettes. Candidate glyphs
-// are the font's genuine glyphs only — synthesized stand-ins never
-// expand what the target medium is claimed to support.
+// Candidate colors are the cell's dominant anchors by default: the
+// nearest palette color of each pixel, ranked by frequency (the
+// dominant-color heuristic validated by the original research), plus the
+// nearest color to the cell mean — which keeps the flat block inside the
+// search space and matters on smooth gradients under fine palettes. The
+// ExhaustiveColors option instead enumerates the whole palette where it
+// is small enough to brute-force, making the pair search exact over
+// colors as well as glyphs; at a small palette the two agree per cell
+// (TestGlyphMatcherAnchorsMatchExhaustive), which is why it is a referee,
+// not a quality lever. Candidate glyphs are the font's genuine glyphs
+// only — synthesized stand-ins never expand what the target medium is
+// claimed to support.
 type GlyphMatcher struct {
 	renderer *Renderer
 	font     *FontBitmaps
@@ -51,6 +56,18 @@ type GlyphMatcher struct {
 	// colors by pixel frequency), and with it the pair search width.
 	// Clamped to 8.
 	MaxAnchors int
+
+	// ExhaustiveColors makes the per-cell pair search enumerate every
+	// palette color as a candidate fg/bg instead of the cell's dominant
+	// anchors, but only where the palette is small enough to brute-force
+	// (<= brutePaletteLimit; above it anchors are used regardless, to
+	// avoid the O(n^2) blowup the quadrant dither also sidesteps). The
+	// default (false) keeps the anchor heuristic, which
+	// TestGlyphMatcherAnchorsMatchExhaustive shows already reaches the
+	// exhaustive optimum at small palettes — so this is a referee/escape
+	// hatch, not a quality lever. Enabling it costs up to
+	// brutePaletteLimit^2 pairs per cell.
+	ExhaustiveColors bool
 
 	// Diffusion enables Floyd-Steinberg error diffusion across cells:
 	// after a cell's (glyph, fg, bg) is decided, each source pixel's
@@ -71,6 +88,14 @@ const cellPixels = GlyphWidth * GlyphHeight
 // footprintLevels quantizes a CRT'd glyph's per-pixel coverage for
 // display-aware matching: level k means coverage k/(footprintLevels-1).
 const footprintLevels = 9
+
+// brutePaletteLimit is the palette size at or below which the matcher
+// enumerates every palette color as a candidate fg/bg, exactly the
+// regime the quadrant dither uses (FindBestBlockRepresentation switches
+// to candidate search above the same 32-color limit). Above it, the
+// cell's dominant anchors are the candidate set instead. It also bounds
+// the per-cell distance matrix.
+const brutePaletteLimit = 32
 
 // glyphFootprint convolves a 1-bit glyph mask with a Gaussian beam-spot
 // PSF (cell-local, clamped at cell edges — cross-cell bleed is not
@@ -388,16 +413,27 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 			m.flatIdx
 	}
 
-	if m.footprints != nil {
-		return m.matchCellDisplayAware(&pixels, anchors)
+	// Candidate fg/bg colors for the pair search. By default these are the
+	// cell's dominant anchors; ExhaustiveColors switches a small-enough
+	// palette to the whole palette (the dither's brutePaletteLimit regime),
+	// making the search exact over colors. Either way every role maps
+	// through the fg color space (nearestFgColor), so one fg-derived pool
+	// serves both fg and bg, exactly as the anchor pool already did.
+	candidates := anchors
+	if m.ExhaustiveColors && len(m.renderer.fgColors) <= brutePaletteLimit {
+		candidates = m.renderer.fgColors
 	}
 
-	// Distance matrix: pixel x anchor, computed once per cell and
+	if m.footprints != nil {
+		return m.matchCellDisplayAware(&pixels, candidates)
+	}
+
+	// Distance matrix: pixel x candidate, computed once per cell and
 	// shared by all (fg, bg) pairs.
-	var dist [n][8]float64
+	var dist [n][brutePaletteLimit]float64
 	for i := 0; i < n; i++ {
-		for a := range anchors {
-			dist[i][a] = m.renderer.ColorMethod.Distance(pixels[i], anchors[a])
+		for a := range candidates {
+			dist[i][a] = m.renderer.ColorMethod.Distance(pixels[i], candidates[a])
 		}
 	}
 
@@ -406,8 +442,8 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 	var bestFG, bestBG RGB
 
 	var absDelta [n]float64
-	for f := range anchors {
-		for b := range anchors {
+	for f := range candidates {
+		for b := range candidates {
 			if f == b {
 				continue
 			}
@@ -443,8 +479,8 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 				if xor == 0 && cost < best {
 					best = cost
 					bestIdx = gi
-					bestFG = anchors[f]
-					bestBG = anchors[b]
+					bestFG = candidates[f]
+					bestBG = candidates[b]
 				}
 			}
 		}
@@ -459,21 +495,21 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 // tabulated, and each glyph's error is the sum of its footprint's
 // per-pixel ladder costs. The per-pixel minimum over the ladder gives
 // the pair's floor for pruning, mirroring the exact path's ideal mask.
-func (m *GlyphMatcher) matchCellDisplayAware(pixels *[cellPixels]RGB, anchors []RGB) (BlockRune, int) {
+func (m *GlyphMatcher) matchCellDisplayAware(pixels *[cellPixels]RGB, candidates []RGB) (BlockRune, int) {
 	best := math.Inf(1)
 	bestIdx := m.flatIdx
 	var bestFG, bestBG RGB
 
 	var pen [cellPixels][footprintLevels]float64
-	for f := range anchors {
-		for b := range anchors {
+	for f := range candidates {
+		for b := range candidates {
 			if f == b {
 				continue
 			}
 
 			var ladder [footprintLevels]RGB
 			for k := range ladder {
-				ladder[k] = blendLinear(anchors[f], anchors[b],
+				ladder[k] = blendLinear(candidates[f], candidates[b],
 					float64(k)/float64(footprintLevels-1))
 			}
 
@@ -509,8 +545,8 @@ func (m *GlyphMatcher) matchCellDisplayAware(pixels *[cellPixels]RGB, anchors []
 				if i == cellPixels && cost < best {
 					best = cost
 					bestIdx = gi
-					bestFG = anchors[f]
-					bestBG = anchors[b]
+					bestFG = candidates[f]
+					bestBG = candidates[b]
 				}
 			}
 		}
