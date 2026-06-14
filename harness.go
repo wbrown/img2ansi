@@ -332,26 +332,47 @@ func MeasureConverterArms(
 	return scores, reference, nil
 }
 
-// ComposeComparison stacks labeled panels vertically into a single
+// ComposeComparison lays labeled panels out in a grid into a single
 // comparison image. Labels are rendered through the font's own glyphs.
+// The column count is chosen so the grid is roughly square given the
+// tile aspect, so a long arm list and tall photo panels both stay
+// readable instead of scrolling off in one column.
 func ComposeComparison(font *FontBitmaps, labels []string, panels []*imageutil.RGBAImage) *image.RGBA {
 	const gutter = 4
 	labelH := GlyphHeight
 
-	width, height := 0, gutter
+	maxW, maxH := 1, 1
 	for _, p := range panels {
-		if p.Width() > width {
-			width = p.Width()
+		if p.Width() > maxW {
+			maxW = p.Width()
 		}
-		height += labelH + 2 + p.Height() + gutter
+		if p.Height() > maxH {
+			maxH = p.Height()
+		}
 	}
+	tileH := labelH + 2 + maxH
+
+	// cols ≈ sqrt(n · tileH / tileW): the value that makes cols·tileW ≈
+	// rows·tileH, i.e. a roughly square composite.
+	n := len(panels)
+	cols := int(math.Round(math.Sqrt(float64(n) * float64(tileH) / float64(maxW))))
+	if cols < 1 {
+		cols = 1
+	}
+	if cols > n {
+		cols = n
+	}
+	rows := (n + cols - 1) / cols
 
 	dark := color.RGBA{24, 24, 24, 255}
-	out := image.NewRGBA(image.Rect(0, 0, width+2*gutter, height))
+	out := image.NewRGBA(image.Rect(0, 0,
+		gutter+cols*(maxW+gutter), gutter+rows*(tileH+gutter)))
 	draw.Draw(out, out.Bounds(), &image.Uniform{dark}, image.Point{}, draw.Src)
 
-	y := gutter
 	for i, p := range panels {
+		x := gutter + (i%cols)*(maxW+gutter)
+		y := gutter + (i/cols)*(tileH+gutter)
+
 		row := make([]BlockRune, 0, len(labels[i]))
 		for _, ch := range labels[i] {
 			row = append(row, BlockRune{
@@ -362,14 +383,12 @@ func ComposeComparison(font *FontBitmaps, labels []string, panels []*imageutil.R
 		}
 		lbl := font.RenderBlocks([][]BlockRune{row}, 1)
 		draw.Draw(out,
-			image.Rect(gutter, y, gutter+lbl.Bounds().Dx(), y+labelH),
+			image.Rect(x, y, x+lbl.Bounds().Dx(), y+labelH),
 			lbl, image.Point{}, draw.Src)
-		y += labelH + 2
 
 		draw.Draw(out,
-			image.Rect(gutter, y, gutter+p.Width(), y+p.Height()),
+			image.Rect(x, y+labelH+2, x+p.Width(), y+labelH+2+p.Height()),
 			p.RGBA, image.Point{}, draw.Src)
-		y += p.Height() + gutter
 	}
 	return out
 }

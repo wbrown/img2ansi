@@ -348,11 +348,26 @@ func TestConverterArms(t *testing.T) {
 			r := NewRenderer(WithPalette(pal))
 			diffusedMatcher := NewGlyphMatcher(r, font)
 			diffusedMatcher.Diffusion = true
+			// Exhaustive-color matcher (no diffusion): the visual form of
+			// TestGlyphMatcherAnchorsMatchExhaustive — at a small palette
+			// its panel must read identical to glyph-matcher.
+			exhaustiveMatcher := NewGlyphMatcher(r, font)
+			exhaustiveMatcher.ExhaustiveColors = true
+			// Display-aware matcher (diffusion + beam): the variant the
+			// blurred-ΔE numbers say wins at 16 colors, shown so the claim
+			// can be judged by eye, not just by metric.
+			displayMatcher := NewGlyphMatcher(r, font)
+			displayMatcher.Diffusion = true
+			if err := displayMatcher.SetBeamSigma(0.5); err != nil {
+				t.Fatal(err)
+			}
 			arms := []ConverterArm{
 				FontArm("quadrant-dither", r, font),
 				FontArm("quadrant-no-diff", noDiffusionQuadrant{r}, font),
 				FontArm("glyph-matcher", NewGlyphMatcher(r, font), font),
+				FontArm("glyph-matcher-exhaust", exhaustiveMatcher, font),
 				FontArm("glyph-matcher-diff", diffusedMatcher, font),
+				FontArm("glyph-matcher-display", displayMatcher, font),
 				FontArm("mean-color-block", meanColorConverter{r}, font),
 			}
 
