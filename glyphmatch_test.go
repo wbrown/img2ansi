@@ -489,3 +489,158 @@ func cellRenderError(t *testing.T, r *Renderer, font *FontBitmaps, br BlockRune,
 	}
 	return sum
 }
+
+// TestGlyphGutterScore pins the seam detector: the full block and the
+// empty glyph score 0, an inset pixel gutters its two near edges, a real
+// letterform gutters, and the score is symmetric under fg/bg complement
+// (so the penalty cannot be dodged by flipping colors).
+func TestGlyphGutterScore(t *testing.T) {
+	if s := glyphGutterScore(^uint64(0)); s != 0 {
+		t.Errorf("full block: got %d, want 0", s)
+	}
+	if s := glyphGutterScore(0); s != 0 {
+		t.Errorf("empty glyph: got %d, want 0", s)
+	}
+	// A single inked pixel at (1,1): the top and left edges are blank with
+	// ink in the neighbor line just inside; bottom and right are not.
+	if s := glyphGutterScore(uint64(1) << (1*GlyphWidth + 1)); s != 2 {
+		t.Errorf("inset pixel: got %d, want 2 (top+left)", s)
+	}
+
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := font.GenuineGlyph('a')
+	if !ok {
+		t.Fatal("font8x8 missing 'a'")
+	}
+	if glyphGutterScore(uint64(a)) == 0 {
+		t.Error("'a' should have at least one gutter edge")
+	}
+	if s, c := glyphGutterScore(uint64(a)), glyphGutterScore(^uint64(a)); s != c {
+		t.Errorf("gutter score not complement-symmetric: %d vs %d", s, c)
+	}
+}
+
+// TestIsReadableRune separates letterforms (penalized) from the geometric
+// glyphs (exempt).
+func TestIsReadableRune(t *testing.T) {
+	for _, r := range []rune{'A', 'z', 'Q', '5', '0'} {
+		if !isReadableRune(r) {
+			t.Errorf("%q should be readable", r)
+		}
+	}
+	for _, r := range []rune{' ', '█', '▒', '▛', '┼', '─'} {
+		if isReadableRune(r) {
+			t.Errorf("%q should not be readable", r)
+		}
+	}
+}
+
+// TestGlyphMatcherGutterPenalty checks the penalty and both waivers on the
+// exact and display-aware paths: a cell that IS a gutter glyph reproduces
+// it by default; a large penalty drives the search to a seam-free glyph;
+// and either a real edge or a near-equal fg/bg restores the gutter glyph.
+func TestGlyphMatcherGutterPenalty(t *testing.T) {
+	r := NewRenderer(WithPalette("ansi16"))
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	white, black := RGB{0xFF, 0xFF, 0xFF}, RGB{0x00, 0x00, 0x00}
+
+	aMask, ok := font.GenuineGlyph('a')
+	if !ok {
+		t.Fatal("font8x8 missing 'a'")
+	}
+	if glyphGutterScore(uint64(aMask)) == 0 {
+		t.Fatal("'a' must have a gutter for this test")
+	}
+	cell := glyphCellImage(aMask, white, black)
+	noEdge := imageutil.NewGrayImage(GlyphWidth, GlyphHeight)
+
+	reproducesA := func(br BlockRune) bool {
+		gm, ok := font.GenuineGlyph(br.Rune)
+		return ok && (uint64(gm) == uint64(aMask) || uint64(gm) == ^uint64(aMask))
+	}
+	seamFree := func(br BlockRune) bool {
+		gm, _ := font.GenuineGlyph(br.Rune)
+		return glyphGutterScore(uint64(gm)) == 0
+	}
+
+	base := NewGlyphMatcher(r, font)
+	if got := base.Convert(cell.Clone(), noEdge)[0][0]; !reproducesA(got) {
+		t.Fatalf("baseline should reproduce 'a', got %q", got.Rune)
+	}
+
+	pen := NewGlyphMatcher(r, font)
+	pen.GutterPenalty = 1e6
+	if got := pen.Convert(cell.Clone(), noEdge)[0][0]; !seamFree(got) {
+		t.Errorf("gutter penalty should choose a seam-free glyph, got %q", got.Rune)
+	}
+
+	// The display-aware path carries the same penalty.
+	penDisplay := NewGlyphMatcher(r, font)
+	penDisplay.GutterPenalty = 1e6
+	if err := penDisplay.SetBeamSigma(0.5); err != nil {
+		t.Fatal(err)
+	}
+	if got := penDisplay.Convert(cell.Clone(), noEdge)[0][0]; !seamFree(got) {
+		t.Errorf("display-aware gutter penalty should choose a seam-free glyph, got %q", got.Rune)
+	}
+
+	// Waiver 1: a cell overlapping a real edge keeps its gutter.
+	allEdge := imageutil.NewGrayImage(GlyphWidth, GlyphHeight)
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			allEdge.SetGrayValue(x, y, 255)
+		}
+	}
+	if got := pen.Convert(cell.Clone(), allEdge)[0][0]; !reproducesA(got) {
+		t.Errorf("edge waiver should restore 'a', got %q", got.Rune)
+	}
+
+	// Waiver 2: a threshold above the white/black distance waives every
+	// pair, so the gutter is allowed without an edge.
+	closeColors := NewGlyphMatcher(r, font)
+	closeColors.GutterPenalty = 1e6
+	closeColors.GutterColorThreshold = 1e9
+	if got := closeColors.Convert(cell.Clone(), noEdge)[0][0]; !reproducesA(got) {
+		t.Errorf("fg/bg closeness waiver should restore 'a', got %q", got.Rune)
+	}
+}
+
+// TestGlyphMatcherReadablePenalty checks the letterform de-emphasis: a
+// cell that IS a letter reproduces it by default, and a large readable
+// penalty drives the search to a non-letter glyph.
+func TestGlyphMatcherReadablePenalty(t *testing.T) {
+	r := NewRenderer(WithPalette("ansi16"))
+	font, err := LoadEmbeddedFont("font8x8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	white, black := RGB{0xFF, 0xFF, 0xFF}, RGB{0x00, 0x00, 0x00}
+
+	aMask, ok := font.GenuineGlyph('A')
+	if !ok {
+		t.Fatal("font8x8 missing 'A'")
+	}
+	cell := glyphCellImage(aMask, white, black)
+	noEdge := imageutil.NewGrayImage(GlyphWidth, GlyphHeight)
+
+	reproducesA := func(br BlockRune) bool {
+		gm, ok := font.GenuineGlyph(br.Rune)
+		return ok && (uint64(gm) == uint64(aMask) || uint64(gm) == ^uint64(aMask))
+	}
+	base := NewGlyphMatcher(r, font)
+	if got := base.Convert(cell.Clone(), noEdge)[0][0]; !reproducesA(got) {
+		t.Fatalf("baseline should reproduce 'A', got %q", got.Rune)
+	}
+
+	pen := NewGlyphMatcher(r, font)
+	pen.ReadablePenalty = 1e6
+	if got := pen.Convert(cell.Clone(), noEdge)[0][0]; isReadableRune(got.Rune) {
+		t.Errorf("readable penalty should choose a non-letter glyph, got %q", got.Rune)
+	}
+}
