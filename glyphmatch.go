@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/bits"
 	"sort"
+	"unicode"
 
 	"github.com/wbrown/img2ansi/imageutil"
 )
@@ -44,6 +45,11 @@ type GlyphMatcher struct {
 	font     *FontBitmaps
 	runes    []rune
 	masks    []uint64
+	// gutters[gi] and readable[gi] are per-glyph attributes the optional
+	// GutterPenalty / ReadablePenalty scoring reads, rebuilt with the
+	// alphabet in RestrictAlphabet (parallel to runes/masks).
+	gutters  []uint8
+	readable []bool
 	flatIdx  int
 
 	// Display-aware matching state (see SetBeamSigma): per-glyph CRT'd
@@ -78,6 +84,26 @@ type GlyphMatcher struct {
 	// as at the quadrant dither's block boundaries. Enabling this makes
 	// Convert mutate its input image.
 	Diffusion bool
+
+	// GutterPenalty de-emphasizes glyphs that leave a 1px background seam
+	// at a cell edge — ink that runs to the boundary and stops, the
+	// artifact letterform spacing columns produce as area texture. Each of
+	// the four cell edges whose line is blank while the line just inside
+	// it has ink adds GutterPenalty to that glyph's cost. The penalty is
+	// waived for the whole cell when it overlaps a Canny edge (the seam is
+	// a real boundary) or when Distance(fg, bg) <= GutterColorThreshold
+	// (the seam is invisible). Zero (default) disables it; tune against
+	// the filmstrips, since the blurred-LAB referee cannot see the gutter.
+	GutterPenalty        float64
+	GutterColorThreshold float64
+
+	// ReadablePenalty de-emphasizes glyphs whose rune the eye reads as a
+	// character (unicode letters and digits), so the search prefers
+	// geometry unless a letterform is decisively the best match — softer
+	// than RestrictAlphabet, which excludes letterforms outright. Block
+	// elements and box drawing are symbols and are never penalized. Zero
+	// (default) disables it.
+	ReadablePenalty float64
 }
 
 var _ BlockConverter = (*GlyphMatcher)(nil)
@@ -259,6 +285,8 @@ func (m *GlyphMatcher) RestrictAlphabet(alphabet []rune) error {
 
 	var runes []rune
 	var masks []uint64
+	var gutters []uint8
+	var readable []bool
 	seen := make(map[rune]bool, len(sorted))
 	for _, ru := range sorted {
 		if seen[ru] {
@@ -268,6 +296,8 @@ func (m *GlyphMatcher) RestrictAlphabet(alphabet []rune) error {
 		if g, ok := m.font.GenuineGlyph(ru); ok {
 			runes = append(runes, ru)
 			masks = append(masks, uint64(g))
+			gutters = append(gutters, glyphGutterScore(uint64(g)))
+			readable = append(readable, isReadableRune(ru))
 		}
 	}
 	if len(runes) == 0 {
@@ -275,6 +305,7 @@ func (m *GlyphMatcher) RestrictAlphabet(alphabet []rune) error {
 	}
 
 	m.runes, m.masks = runes, masks
+	m.gutters, m.readable = gutters, readable
 
 	// Rune for flat cells (fg == bg renders identically under any
 	// glyph; prefer the full block when the alphabet has one).
@@ -295,9 +326,10 @@ func (m *GlyphMatcher) SourcePixelsPerCell() int {
 	return GlyphWidth
 }
 
-// Convert implements BlockConverter. The edge map is currently unused.
-// With Diffusion enabled, img is mutated as cells are processed in
-// raster order.
+// Convert implements BlockConverter. The edge map gates the optional
+// GutterPenalty (a cell overlapping a Canny edge keeps its gutter) and is
+// otherwise unused. With Diffusion enabled, img is mutated as cells are
+// processed in raster order.
 func (m *GlyphMatcher) Convert(img *imageutil.RGBAImage, edges *imageutil.GrayImage) [][]BlockRune {
 	k := GlyphWidth
 	cellsH, cellsW := img.Height()/k, img.Width()/k
@@ -305,7 +337,7 @@ func (m *GlyphMatcher) Convert(img *imageutil.RGBAImage, edges *imageutil.GrayIm
 	for cy := range out {
 		out[cy] = make([]BlockRune, cellsW)
 		for cx := range out[cy] {
-			cell, gi := m.matchCell(img, cx*k, cy*k)
+			cell, gi := m.matchCell(img, cx*k, cy*k, cellHasEdge(edges, cx*k, cy*k))
 			out[cy][cx] = cell
 			if m.Diffusion {
 				if m.footprints != nil {
@@ -371,7 +403,7 @@ func (m *GlyphMatcher) diffuseCellResidualBlend(
 // for the 8x8 cell at (x0, y0), returning the chosen cell and the index
 // of the winning glyph (which diffusion uses to look up each pixel's
 // rendered color).
-func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRune, int) {
+func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int, isEdge bool) (BlockRune, int) {
 	const n = cellPixels
 
 	var pixels [n]RGB
@@ -425,7 +457,7 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 	}
 
 	if m.footprints != nil {
-		return m.matchCellDisplayAware(&pixels, candidates)
+		return m.matchCellDisplayAware(&pixels, candidates, isEdge)
 	}
 
 	// Distance matrix: pixel x candidate, computed once per cell and
@@ -440,6 +472,9 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 	best := math.Inf(1)
 	bestIdx := m.flatIdx
 	var bestFG, bestBG RGB
+
+	readableOn := m.ReadablePenalty > 0
+	gutterOn := m.GutterPenalty > 0 && !isEdge
 
 	var absDelta [n]float64
 	for f := range candidates {
@@ -469,9 +504,22 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 				continue
 			}
 
+			gutterPair := false
+			if gutterOn {
+				gutterPair = m.renderer.ColorMethod.Distance(
+					candidates[f], candidates[b]) > m.GutterColorThreshold
+			}
+
 			for gi, mask := range m.masks {
+				extra := 0.0
+				if readableOn && m.readable[gi] {
+					extra += m.ReadablePenalty
+				}
+				if gutterPair {
+					extra += m.GutterPenalty * float64(m.gutters[gi])
+				}
 				xor := mask ^ ideal
-				cost := pairFloor
+				cost := pairFloor + extra
 				for xor != 0 && cost < best {
 					cost += absDelta[bits.TrailingZeros64(xor)]
 					xor &= xor - 1
@@ -495,10 +543,13 @@ func (m *GlyphMatcher) matchCell(img *imageutil.RGBAImage, x0, y0 int) (BlockRun
 // tabulated, and each glyph's error is the sum of its footprint's
 // per-pixel ladder costs. The per-pixel minimum over the ladder gives
 // the pair's floor for pruning, mirroring the exact path's ideal mask.
-func (m *GlyphMatcher) matchCellDisplayAware(pixels *[cellPixels]RGB, candidates []RGB) (BlockRune, int) {
+func (m *GlyphMatcher) matchCellDisplayAware(pixels *[cellPixels]RGB, candidates []RGB, isEdge bool) (BlockRune, int) {
 	best := math.Inf(1)
 	bestIdx := m.flatIdx
 	var bestFG, bestBG RGB
+
+	readableOn := m.ReadablePenalty > 0
+	gutterOn := m.GutterPenalty > 0 && !isEdge
 
 	var pen [cellPixels][footprintLevels]float64
 	for f := range candidates {
@@ -532,9 +583,22 @@ func (m *GlyphMatcher) matchCellDisplayAware(pixels *[cellPixels]RGB, candidates
 				continue
 			}
 
+			gutterPair := false
+			if gutterOn {
+				gutterPair = m.renderer.ColorMethod.Distance(
+					candidates[f], candidates[b]) > m.GutterColorThreshold
+			}
+
 			for gi := range m.footprints {
+				extra := 0.0
+				if readableOn && m.readable[gi] {
+					extra += m.ReadablePenalty
+				}
+				if gutterPair {
+					extra += m.GutterPenalty * float64(m.gutters[gi])
+				}
 				fp := &m.footprints[gi]
-				cost := floor
+				cost := floor + extra
 				i := 0
 				for ; i < cellPixels; i++ {
 					cost += pen[i][fp[i]]
@@ -563,6 +627,58 @@ func (m *GlyphMatcher) maxAnchors() int {
 		return 8
 	}
 	return m.MaxAnchors
+}
+
+// glyphGutterScore counts how many of the four cell edges are a 1px seam:
+// a uniform edge line (entirely background or entirely foreground) whose
+// inner neighbor line holds the opposite color — ink that approaches the
+// boundary and stops, or background that does, the artifact a letterform's
+// spacing column leaves as area texture. The definition is symmetric under
+// fg/bg swap, so a glyph and its complement score the same and the matcher
+// cannot dodge the penalty by flipping colors. A partial or matching edge
+// is not a seam, so quadrant blocks, box drawing and the full block all
+// score 0. Bit i is pixel (i%8, i/8).
+func glyphGutterScore(mask uint64) uint8 {
+	edges := [4]struct{ edge, inner uint64 }{
+		{0x00000000000000FF, 0x000000000000FF00}, // top row, row 1
+		{0xFF00000000000000, 0x00FF000000000000}, // bottom row, row 6
+		{0x0101010101010101, 0x0202020202020202}, // left col, col 1
+		{0x8080808080808080, 0x4040404040404040}, // right col, col 6
+	}
+	var score uint8
+	for _, e := range edges {
+		switch edgeBits := mask & e.edge; {
+		case edgeBits == 0 && mask&e.inner != 0:
+			score++ // solid-background edge, foreground just inside
+		case edgeBits == e.edge && mask&e.inner != e.inner:
+			score++ // solid-foreground edge, background just inside
+		}
+	}
+	return score
+}
+
+// isReadableRune reports whether the eye reads r as a character — a
+// unicode letter or digit. Block elements (U+2580–259F) and box drawing
+// (U+2500–257F) are symbols, so this is false for them.
+func isReadableRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// cellHasEdge reports whether any pixel of the 8x8 cell at (x0, y0) is a
+// Canny edge (> 128, the quadrant dither's threshold). Out-of-range reads
+// return 0, so a nil or smaller edge map simply reports no edge.
+func cellHasEdge(edges *imageutil.GrayImage, x0, y0 int) bool {
+	if edges == nil {
+		return false
+	}
+	for y := 0; y < GlyphHeight; y++ {
+		for x := 0; x < GlyphWidth; x++ {
+			if edges.GetGray(x0+x, y0+y) > 128 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // topAnchors returns up to maxK anchor colors ordered by descending
